@@ -5,6 +5,9 @@ import type { NextFunction, Request, Response } from 'express';
 const ALLOWED_CALLERS: Record<string, string | undefined> = {
   'tracking-service': process.env.INTERNAL_SECRET_TRACKING_AUTH,
   'notification-service': process.env.INTERNAL_SECRET_NOTIFICATION_AUTH,
+  // Ajoutée pour le serveur CalDAV de calendar-service : résout l'email de
+  // l'utilisateur pour générer son username CalDAV (voir Kelenda_Suivi_Implementation.md).
+  'calendar-service': process.env.INTERNAL_SECRET_CALENDAR_AUTH,
 };
 
 export function requireInternalCaller(req: Request, res: Response, next: NextFunction): void {
