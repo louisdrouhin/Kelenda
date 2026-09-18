@@ -91,14 +91,10 @@ spec:
         - name: auth-service
           port: 80
 ---
-# Route de test pour valider le forward-auth réel (pas un vrai service métier —
-# calendar-service n'existe pas encore). Réutilise le /health d'auth-service
-# comme backend derrière le middleware forward-auth, juste pour vérifier que
-# Traefik appelle bien /auth/verify et injecte X-User-Id/X-Workspace-Id avant
-# de proxifier — /health répond toujours 200, donc les headers de la réponse
-# du BACKEND ne servent à rien ici : ce qui compte est de vérifier que la
-# requête ATTEINT le backend uniquement avec un token valide (401 sinon).
-# À remplacer par une vraie route calendar-service une fois ce service prêt.
+# Route de test historique pour valider le forward-auth réel avant que
+# calendar-service n'existe. Conservée comme route de debug rapide (health-check
+# seul, sans dépendance à un vrai service) — voir kelenda-calendar ci-dessous
+# pour la vraie route protégée par forward-auth.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -115,4 +111,21 @@ spec:
         - name: strip-forward-auth-test-prefix
       services:
         - name: auth-service
+          port: 80
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kelenda-calendar
+  namespace: kelenda
+spec:
+  entryPoints: [web]
+  routes:
+    - match: PathPrefix(`/calendar`)
+      kind: Rule
+      middlewares:
+        - name: forward-auth
+        - name: rate-limit
+      services:
+        - name: calendar-service
           port: 80
