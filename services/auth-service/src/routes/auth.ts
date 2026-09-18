@@ -28,7 +28,7 @@ router.post('/register', async (req, res) => {
     const workspaceId = workspaceResult.rows[0].id;
 
     const userResult = await client.query(
-      "INSERT INTO users (workspace_id, email, role) VALUES ($1, $2, 'admin') RETURNING id, email, workspace_id",
+      'INSERT INTO users (workspace_id, email) VALUES ($1, $2) RETURNING id, email, workspace_id',
       [workspaceId, email]
     );
     const user = userResult.rows[0];
