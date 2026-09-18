@@ -380,6 +380,8 @@ CREATE TABLE users (
     workspace_id  uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     email         citext NOT NULL UNIQUE,
     display_name  text,
+    role          text NOT NULL DEFAULT 'member'
+                  CHECK (role IN ('admin', 'member')),
     status        text NOT NULL DEFAULT 'active'
                   CHECK (status IN ('active', 'suspended')),
     created_at    timestamptz NOT NULL DEFAULT now(),
@@ -391,6 +393,11 @@ CREATE INDEX idx_users_workspace_id ON users(workspace_id);
 CREATE TRIGGER trg_users_updated_at
     BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+```
+
+**Rôles (ajouté après la spec initiale, migration `1700000001000_add_user_role`) :** `role` distingue `admin` / `member` au sein d'un workspace. Tout nouveau compte (`register` ou premier login OAuth) démarre en `member` — il n'y a **pas** de promotion automatique en admin. La promotion se fera via un **panel d'administration à construire** (probablement `PATCH /users/:id/role`, protégé par le middleware `requireAdmin` déjà en place côté auth-service, plus l'écran frontend correspondant) — voir le fichier de suivi de projet pour le statut. Tant que ce panel n'existe pas, un premier admin ne peut être créé que manuellement en base.
+
+```sql
 
 -- ------------------------------------------------------------
 -- credentials (auth locale — 0..1 par user)
@@ -881,6 +888,9 @@ Chaque service expose en plus un `GET /health` (sans auth, aucune logique métie
 | PATCH | `/workspaces/:id` | Modifier un workspace | Oui |
 | GET | `/internal/users/:id` | **[interne]** Récupérer les infos d'un utilisateur | Service-to-service |
 | GET | `/auth/verify` | **[gateway uniquement]** Vérifie la signature du JWT, renvoie 200 + `X-User-Id`/`X-Workspace-Id` ou 401 — appelé par le middleware forward-auth de Traefik | Appelant : Traefik uniquement |
+| PATCH | `/users/:id/role` | **[à construire]** Panel admin — promouvoir/rétrograder un utilisateur (`admin`/`member`) au sein de son workspace | Oui, `requireAdmin` |
+
+*Tous les endpoints ci-dessus sont implémentés dans `services/auth-service` sauf `PATCH /users/:id/role`, marqué **[à construire]** — voir `docs/Kelenda_Suivi_Implementation.md` pour le statut à jour.*
 
 ---
 
