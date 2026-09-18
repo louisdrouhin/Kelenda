@@ -204,8 +204,26 @@ router.delete('/sessions/:id', requireAuth, async (req, res) => {
   return res.status(204).send();
 });
 
+router.get('/verify', (req, res) => {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    return res.status(401).send();
+  }
+
+  const token = header.slice('Bearer '.length);
+
+  try {
+    const payload = verifyAccessToken(token);
+    res.setHeader('X-User-Id', payload.sub);
+    res.setHeader('X-Workspace-Id', payload.workspace_id);
+    return res.status(200).send();
+  } catch {
+    return res.status(401).send();
+  }
+});
+
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
 }
 
-export { router as authRouter, verifyAccessToken };
+export { router as authRouter };

@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import 'express-async-errors';
 import { authRouter } from './routes/auth';
+import { internalRouter } from './routes/internal';
 import { oauthRouter } from './routes/oauth';
 import { workspacesRouter } from './routes/workspaces';
 
@@ -17,6 +18,7 @@ app.get('/health', (_req, res) => {
 app.use('/auth', authRouter);
 app.use('/auth', oauthRouter);
 app.use('/workspaces', workspacesRouter);
+app.use('/internal', internalRouter);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
