@@ -21,7 +21,7 @@ router.get('/', requireAuth, async (req, res) => {
 
   const result = await pool.query(
     `SELECT e.id, e.source_id, e.title, e.description, e.location, e.start_at, e.end_at,
-            e.all_day, e.category, e.created_at, e.updated_at
+            e.all_day, e.category, e.is_deadline, e.created_at, e.updated_at
      FROM events e
      JOIN calendar_sources s ON s.id = e.source_id
      WHERE s.user_id = $1
@@ -38,11 +38,36 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/:id', requireAuth, async (req, res) => {
   const result = await pool.query(
     `SELECT e.id, e.source_id, e.title, e.description, e.location, e.start_at, e.end_at,
-            e.all_day, e.category, e.created_at, e.updated_at
+            e.all_day, e.category, e.is_deadline, e.created_at, e.updated_at
      FROM events e
      JOIN calendar_sources s ON s.id = e.source_id
      WHERE e.id = $1 AND s.user_id = $2`,
     [req.params.id, req.auth!.sub]
+  );
+
+  const event = result.rows[0];
+  if (!event) {
+    return res.status(404).json({ error: 'Événement introuvable' });
+  }
+
+  return res.status(200).json(event);
+});
+
+router.patch('/:id', requireAuth, async (req, res) => {
+  const { is_deadline } = req.body ?? {};
+
+  if (typeof is_deadline !== 'boolean') {
+    return res.status(400).json({ error: 'is_deadline doit être un booléen' });
+  }
+
+  const result = await pool.query(
+    `UPDATE events e
+     SET is_deadline = $3
+     FROM calendar_sources s
+     WHERE e.id = $1 AND e.source_id = s.id AND s.user_id = $2
+     RETURNING e.id, e.source_id, e.title, e.description, e.location, e.start_at, e.end_at,
+               e.all_day, e.category, e.is_deadline, e.created_at, e.updated_at`,
+    [req.params.id, req.auth!.sub, is_deadline]
   );
 
   const event = result.rows[0];

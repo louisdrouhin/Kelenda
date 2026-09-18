@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import 'express-async-errors';
 import { requireBasicAuth } from './caldav/require-basic-auth';
+import { startDeadlineJob } from './deadline-job';
 import { caldavCredentialsRouter } from './routes/caldav-credentials';
 import { caldavDiscoveryRouter } from './routes/caldav-discovery';
 import { caldavEventsRouter } from './routes/caldav-events';
@@ -45,3 +46,5 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 app.listen(port, () => {
   console.log(`calendar-service listening on port ${port}`);
 });
+
+startDeadlineJob();
