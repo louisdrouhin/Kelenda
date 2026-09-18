@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import 'express-async-errors';
+import { simulateSalaryRouter, simulationsRouter } from './routes/simulations';
 
 const app = express();
 const port = process.env.PORT ?? 3003;
@@ -10,6 +11,9 @@ app.use(express.json());
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok' });
 });
+
+app.use('/finance/simulate-salary', simulateSalaryRouter);
+app.use('/finance/simulations', simulationsRouter);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
