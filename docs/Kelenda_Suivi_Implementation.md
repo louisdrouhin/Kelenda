@@ -49,7 +49,7 @@ Tous les endpoints de la doc section 10 sont implémentés et testés manuelleme
 - Handler d'erreur JSON global + `express-async-errors` (Express 4 ne catchait pas les rejets de promesses par défaut).
 - Migrations `node-pg-migrate`, testées up/down.
 
-**Validé en local (docker compose), pas encore en k3d/Traefik réel** — cf. section 7.
+**Validé en k3d avec Traefik forward-auth réel** (2026-09-18) — voir détails dans la section 7 ci-dessous.
 
 ## 3. calendar-service — ⬜
 
@@ -67,9 +67,20 @@ Pas commencé. Dépend d'un pub/sub NATS fonctionnel de bout en bout.
 
 Pas commencé.
 
-## 7. Déploiement homelab + sécurité réseau — ⬜
+## 7. Déploiement homelab + sécurité réseau — 🚧 (validation auth-service faite, reste le homelab réel)
 
-Pas commencé. `auth-service` doit être validé en k3d avec Traefik forward-auth réel avant de considérer cette phase (cf. plan de dev, section 2).
+**Prérequis "auth-service validé en k3d" rempli** (2026-09-18), sur un cluster k3d local (pas encore le homelab final) :
+- Manifests créés dans `infra/k8s/` : `00-namespace.yaml`, `01-postgres.yaml`, `10-auth-service.yaml`, `20-traefik-routes.yaml`.
+- `services/auth-service/Dockerfile` créé (template doc section 14, avec deux corrections : ajout de `tsconfig.base.json` manquant du contexte de build, point d'entrée `dist/index.js` au lieu de `dist/main.js` pour matcher le code réel).
+- Testé bout-en-bout via Traefik (`http://localhost:8080`, entryPoint `web` HTTP — pas `websecure`/TLS, pas encore configuré) : `register` → `login` → `GET /auth/me` (JWT vérifié par le service lui-même) → forward-auth (401 sans token, 200 + headers injectés avec token valide, confirmé aussi dans les logs Traefik) → `/internal/*` confirmé non exposé publiquement (404, aucune IngressRoute ne le sert).
+
+**Bug trouvé et corrigé dans le manifest** (touche potentiellement les 5 services, pas seulement auth-service) : dans un `Deployment`, la substitution `$(VAR)` façon `DATABASE_URL: "postgresql://user:$(PASSWORD)@host/db"` ne se résout **que si `PASSWORD` est déclarée AVANT `DATABASE_URL`** dans la liste `env`. La doc section 12.4 (et donc 12.5 à 12.8 par le même pattern) déclare `DATABASE_URL` avant le secret qu'elle référence — ça échoue silencieusement (le literal `$(PASSWORD)` est envoyé tel quel à Postgres, qui rejette l'auth sans message clair côté appelant). **À corriger dans les manifests `calendar-service`/`finance-service`/`tracking-service`/`notification-service` quand on les écrira** : mettre le `secretKeyRef` avant la variable qui l'interpole.
+
+**Reste à faire pour cette phase :**
+- NetworkPolicies (doc section 12.11) — pas encore appliquées sur ce cluster de test (nécessite Calico, pas Flannel — non vérifié sur ce cluster k3d).
+- TLS / entryPoint `websecure` — le test a été fait en HTTP simple (`web`), pas HTTPS.
+- Déploiement sur le vrai homelab (K3s réel, pas k3d local) — tout ce qui précède n'a été fait que sur un cluster k3d local éphémère.
+- NATS JetStream (doc section 12.10, Helm) — pas encore installé/testé en cluster (nécessaire dès que calendar-service ou un autre service publie des événements).
 
 ## 8. Frontend — ⬜
 
@@ -81,5 +92,6 @@ Pas commencé (React + Vite SPA, PWA).
 
 - **Panel admin** (`PATCH /users/:id/role` ou équivalent) — permettre à un admin de promouvoir/rétrograder un membre de son workspace. Nécessaire maintenant que tout compte démarre `member` : sans ce panel, aucun workspace ne peut avoir d'admin. Backend : endpoint protégé par `requireAdmin` (middleware déjà en place). Frontend : écran dédié, à construire en phase 8.
 - **Pas de table de membership multi-users** (`workspace_members` ou équivalent) — le schéma actuel (doc section 9.1) lie un `user` à un seul `workspace_id` fixe. `POST /workspaces` crée un workspace indépendant sans y rattacher automatiquement le créateur. Si Kelenda doit permettre à un utilisateur d'appartenir à plusieurs workspaces, ou un rôle différent par workspace, ça demandera une migration de refonte (colonne `workspace_id` sur `users` → table de jointure).
-- **`/auth/verify` et `/internal/*` pas testés via Traefik réel** — testés uniquement en appelant le service Express directement en local. La validation k3d (plan de dev section 2) reste à faire.
 - **OAuth testé en réel uniquement avec Microsoft** (Google et GitHub ont le même code générique mais n'ont pas été testés avec de vrais credentials).
+- **Bug de manifest `$(VAR)`** (voir section 7) à corriger dans les manifests des 4 autres services au moment de leur écriture.
+- **NetworkPolicies, TLS, NATS pas encore testés en cluster** (voir section 7, "reste à faire").
