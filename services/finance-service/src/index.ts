@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import 'express-async-errors';
+import { aidsRouter } from './routes/aids';
 import { primeChecksRouter } from './routes/prime-checks';
 import { simulateSalaryRouter, simulationsRouter } from './routes/simulations';
 
@@ -16,6 +17,7 @@ app.get('/health', (_req, res) => {
 app.use('/finance/simulate-salary', simulateSalaryRouter);
 app.use('/finance/simulations', simulationsRouter);
 app.use('/finance/prime-checks', primeChecksRouter);
+app.use('/finance/aids', aidsRouter);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
