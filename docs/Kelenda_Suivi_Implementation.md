@@ -51,9 +51,37 @@ Tous les endpoints de la doc section 10 sont implémentés et testés manuelleme
 
 **Validé en k3d avec Traefik forward-auth réel** (2026-09-18) — voir détails dans la section 7 ci-dessous.
 
-## 3. calendar-service — ⬜
+## 3. calendar-service — 🚧 (cœur A.1/A.2/A.3 fait et testé, CalDAV + A.4/A.5 restants)
 
-Pas commencé. Prochaine étape logique selon le plan (cœur du MVP : parsing ICS, CalDAV, détection de créneaux libres, détection de conflits `tstzrange`+GiST).
+Toutes les routes testées manuellement contre une vraie DB Postgres, y compris cross-service (JWT signé par `auth-service`, vérifié par `calendar-service` via la clé publique partagée) et NATS réel (`mission_scheduled` reçu par un vrai subscriber).
+
+**Endpoints livrés :**
+| Endpoint | Statut |
+|---|---|
+| `POST /calendar/sources` | ✅ (`type=interne` bloqué — réservé à la création automatique) |
+| `GET /calendar/sources` | ✅ |
+| `PATCH /calendar/sources/:id` | ✅ |
+| `DELETE /calendar/sources/:id` | ✅ |
+| `POST /calendar/sources/:id/sync` | ✅ pour `ics_ecole`/`ics_entreprise` (fetch+parse ICS, upsert par `external_uid`) — ⬜ `caldav_perso` non supporté (400 explicite), voir "Trous connus" |
+| `GET /calendar/events` | ✅ (filtres `from`/`to`/`category`) |
+| `GET /calendar/events/:id` | ✅ |
+| `GET /calendar/free-slots` | ✅ (`from`/`to`/`min_duration_minutes`/`working_hours_start`/`working_hours_end`) |
+| `POST /calendar/free-slots/accept` | ✅ (crée l'événement catégorie `personnel`/source `interne` unique par utilisateur, publie `mission_scheduled` sur NATS) |
+| `GET /calendar/conflicts` | ✅ (filtre `status`) |
+| `PATCH /calendar/conflicts/:id` | ✅ (`resolved`/`dismissed`) |
+
+**Détails techniques livrés :**
+- Migrations : `calendar_sources`, `events` (colonne générée `tstzrange` + index GiST, vérifié avec `EXPLAIN` que Postgres utilise bien l'index), `detected_conflicts`, `commute_estimates` (schéma créé, aucun endpoint ne l'utilise encore — A.5 pas dans le périmètre de cette passe), plus un index unique partiel `(user_id) WHERE type='interne'` (pas dans la doc originale, nécessaire pour garantir "un seul par utilisateur").
+- Détection de conflits (A.3) : automatique à chaque sync, compare `ecole`×`entreprise` uniquement (pas `personnel`), idempotente (`ON CONFLICT DO NOTHING` sur `(event_a_id, event_b_id)`).
+- Free-slots (A.2) : algorithme testé isolément (fenêtres horaires découpées par jour, soustraction des créneaux occupés, filtre durée minimale) avant intégration aux routes.
+- JWT vérifié localement par `calendar-service` (jamais confiance au seul `X-User-Id` Traefik, conforme au CLAUDE.md) — même convention dual-mode `JWT_PUBLIC_KEY`/`JWT_PUBLIC_KEY_PATH` qu'auth-service.
+- `Dockerfile` créé (même template qu'auth-service, fix `tsconfig.base.json` inclus dès le départ).
+
+**Pas encore fait :**
+- Sync CalDAV réelle (`caldav_perso`) — actuellement CRUD seul, la route `/sync` refuse ce type explicitement.
+- `deadline_approaching` (A.4, notifications progressives) — nécessite un job planifié, pas encore écrit.
+- `commute_estimates` / optimisation trajets (A.5) — schéma DB présent, aucune route ni logique.
+- Pas encore validé en k3d (seulement en local via `docker compose`, comme les étapes précédentes d'auth-service avant sa propre validation k3d).
 
 ## 4. finance-service — ⬜
 
