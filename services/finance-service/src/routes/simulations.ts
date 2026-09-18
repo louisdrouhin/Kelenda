@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { fetchCollectiveAgreementBySiret } from '../clients/entreprise-api';
+import { fetchCollectiveAgreementBySiret } from '../clients/siret2idcc';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/require-auth';
 import { computeSalaryFromScale, findApplicableScale } from '../salary-calculator';
