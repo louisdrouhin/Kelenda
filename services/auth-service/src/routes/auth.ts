@@ -1,18 +1,14 @@
 import bcrypt from 'bcrypt';
 import { Router } from 'express';
 import { pool } from '../db';
-import { signAccessToken, verifyAccessToken } from '../jwt';
+import { verifyAccessToken } from '../jwt';
 import { requireAuth } from '../middleware/require-auth';
-import { generateRefreshToken, hashRefreshToken } from '../refresh-token';
+import { hashRefreshToken } from '../refresh-token';
+import { issueSession } from './session';
 
 const router = Router();
 
 const BCRYPT_ROUNDS = 12;
-const REFRESH_TOKEN_TTL_DAYS = 30;
-
-function refreshTokenExpiry(): Date {
-  return new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
-}
 
 router.post('/register', async (req, res) => {
   const { email, password, workspace_name } = req.body ?? {};
@@ -207,23 +203,6 @@ router.delete('/sessions/:id', requireAuth, async (req, res) => {
 
   return res.status(204).send();
 });
-
-async function issueSession(userId: string, workspaceId: string, deviceInfo: string | undefined) {
-  const accessToken = signAccessToken(userId, workspaceId);
-
-  const refreshToken = generateRefreshToken();
-  const refreshTokenHash = hashRefreshToken(refreshToken);
-
-  await pool.query(
-    'INSERT INTO sessions (user_id, refresh_token_hash, device_info, expires_at) VALUES ($1, $2, $3, $4)',
-    [userId, refreshTokenHash, deviceInfo ?? null, refreshTokenExpiry()]
-  );
-
-  return {
-    access_token: accessToken,
-    refresh_token: refreshToken,
-  };
-}
 
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
