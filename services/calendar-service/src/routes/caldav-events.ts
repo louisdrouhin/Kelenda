@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import type { Request, Response } from 'express';
 import { Router } from 'express';
 import { requireBasicAuth } from '../caldav/require-basic-auth';
 import { parseVeventDocument } from '../caldav/ical-reader';
 import { eventToIcsDocument } from '../caldav/ical-writer';
 import { parseCalendarQueryTimeRange } from '../caldav/query-parser';
 import { getOrCreateCaldavSource } from '../caldav/source';
+import { decodeSyncToken, encodeSyncToken, parseSyncToken } from '../caldav/sync-query-parser';
 import { buildMultistatus, buildResponse, xmlEscape } from '../caldav/xml';
 import { pool } from '../db';
 
@@ -16,12 +18,23 @@ function eventHref(userId: string, event: { caldav_href: string }): string {
   return `/calendar/caldav/calendars/${userId}/personal/${event.caldav_href}`;
 }
 
+// RFC 4791 calendar-query et RFC 6578 sync-collection partagent la même
+// route WebDAV (REPORT sur la collection) — seule la racine du body XML
+// change (<C:calendar-query> vs <D:sync-collection>). On distingue les deux
+// en cherchant "sync-collection" dans le body brut plutôt que de parser deux
+// fois : les clients réels envoient l'un ou l'autre, jamais les deux à la fois.
 router.report('/calendars/:userId/personal/', requireBasicAuth, async (req, res) => {
   if (req.params.userId !== req.caldavUserId) {
     return res.status(403).send();
   }
 
-  const timeRange = await parseCalendarQueryTimeRange(typeof req.body === 'string' ? req.body : '');
+  const body = typeof req.body === 'string' ? req.body : '';
+
+  if (body.includes('sync-collection')) {
+    return handleSyncCollection(req, res, body);
+  }
+
+  const timeRange = await parseCalendarQueryTimeRange(body);
   const sourceId = await getOrCreateCaldavSource(req.caldavUserId!);
 
   const result = await pool.query(
@@ -45,6 +58,68 @@ router.report('/calendars/:userId/personal/', requireBasicAuth, async (req, res)
 
   res.status(207).type('application/xml; charset=utf-8').send(buildMultistatus(responses));
 });
+
+async function handleSyncCollection(req: Request, res: Response, body: string) {
+  const userId = req.caldavUserId!;
+  const clientToken = await parseSyncToken(body);
+  const sinceId = decodeSyncToken(clientToken);
+
+  const sourceId = await getOrCreateCaldavSource(userId);
+
+  // Watermark actuel AVANT de lire les changements, pour que le prochain
+  // sync-token renvoyé ne "rate" jamais un changement écrit entre les deux
+  // requêtes SQL ci-dessous (un id plus élevé créé après ce SELECT sera
+  // simplement inclus à la prochaine sync, jamais perdu).
+  const watermarkResult = await pool.query(
+    'SELECT COALESCE(MAX(id), 0) AS max_id FROM caldav_sync_changes WHERE source_id = $1',
+    [sourceId]
+  );
+  const watermark: number = Number(watermarkResult.rows[0].max_id);
+
+  const changesResult = await pool.query(
+    `SELECT DISTINCT ON (caldav_href) caldav_href, change_type
+     FROM caldav_sync_changes
+     WHERE source_id = $1 AND id > $2
+     ORDER BY caldav_href, id DESC`,
+    [sourceId, sinceId]
+  );
+
+  const responses: string[] = [];
+
+  for (const change of changesResult.rows) {
+    const href = `/calendar/caldav/calendars/${userId}/personal/${change.caldav_href}`;
+
+    if (change.change_type === 'deleted') {
+      responses.push(buildResponse(href, '', 'HTTP/1.1 404 Not Found'));
+      continue;
+    }
+
+    const eventResult = await pool.query(
+      `SELECT id, title, description, location, start_at, end_at, all_day, caldav_href, caldav_etag
+       FROM events WHERE source_id = $1 AND caldav_href = $2`,
+      [sourceId, change.caldav_href]
+    );
+    const event = eventResult.rows[0];
+    if (!event) continue; // recréé puis supprimé entre-temps : rien à annoncer
+
+    responses.push(
+      buildResponse(
+        href,
+        `        <D:getetag>"${xmlEscape(event.caldav_etag)}"</D:getetag>
+        <C:calendar-data xmlns:C="${CALDAV_NS}">${xmlEscape(eventToIcsDocument(event))}</C:calendar-data>`
+      )
+    );
+  }
+
+  const newToken = encodeSyncToken(watermark);
+  const body207 = `<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="${CALDAV_NS}">
+${responses.join('\n')}
+  <D:sync-token>${xmlEscape(newToken)}</D:sync-token>
+</D:multistatus>`;
+
+  res.status(207).type('application/xml; charset=utf-8').send(body207);
+}
 
 router.get('/calendars/:userId/personal/:eventFile', requireBasicAuth, async (req, res) => {
   if (req.params.userId !== req.caldavUserId) {
