@@ -3,6 +3,7 @@ import express from 'express';
 import 'express-async-errors';
 import { conflictsRouter } from './routes/conflicts';
 import { eventsRouter } from './routes/events';
+import { freeSlotsRouter } from './routes/free-slots';
 import { sourcesRouter } from './routes/sources';
 
 const app = express();
@@ -17,6 +18,7 @@ app.get('/health', (_req, res) => {
 app.use('/calendar/sources', sourcesRouter);
 app.use('/calendar/events', eventsRouter);
 app.use('/calendar/conflicts', conflictsRouter);
+app.use('/calendar/free-slots', freeSlotsRouter);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
