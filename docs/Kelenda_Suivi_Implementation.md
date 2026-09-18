@@ -108,9 +108,41 @@ Décision explicite (2026-09-18) : `caldav_perso` n'est **pas** un client qui im
 **Pas encore fait :**
 - `commute_estimates` / optimisation trajets (A.5) — schéma DB présent, aucune route ni logique. Marqué "idée secondaire, faible priorité" dans la doc (section 3, A.5).
 
-## 4. finance-service — ⬜
+## 4. finance-service — ✅ (B.1/B.2/B.3 faits et testés avec de vraies API gouvernementales, validé k3d)
 
-Pas commencé.
+Tous les endpoints testés avec de **vrais appels API externes** (pas de mocks) : API Légifrance/PISTE en production, et siret2idcc (SocialGouv).
+
+**Endpoints livrés :**
+| Endpoint | Statut |
+|---|---|
+| `POST /finance/simulate-salary` | ✅ |
+| `GET /finance/simulations` | ✅ |
+| `GET /finance/simulations/:id` | ✅ |
+| `GET /finance/prime-checks` | ✅ |
+| `POST /finance/prime-checks/check` | ✅ (vrai appel Légifrance) |
+| `PATCH /finance/prime-checks/:id` | ✅ |
+| `GET /finance/aids` | ✅ |
+| `POST /finance/aids/check` | ✅ |
+| `GET /finance/collective-agreements/:siret` | ✅ |
+
+**B.1 — Simulateur de salaire :** barème officiel apprentis (service-public.fr, vérifié par recherche web le 2026-09-19 — 16 lignes couvrant 4 tranches d'âge × 4 années de contrat, année 4 = taux année 3 faute de palier officiel au-delà). Vérifié exact contre le barème réel (18 ans/année 2 → 952.18€, 51% du SMIC ; 26 ans → 1867.02€, 100%).
+
+**B.2 — Vérification des primes conventionnelles :** client Légifrance (PISTE, OAuth2 client-credentials) contre l'**API réelle en production**. Endpoints et formats de payload devinés initialement à partir de documentation tierce (source de la librairie `pylegifrance`, le vrai swagger PISTE n'étant pas accessible sans y être authentifié), puis corrigés après confrontation à de vrais appels HTTP : `/list/idcc` → `/consult/kaliContIdcc`, champ `idcc` → `id`, `results[].titre` → `results[].titles[0].title`. Testé avec la convention Syntec réelle (IDCC 1486) : recherche "prime de vacances" retourne effectivement des extraits du texte légal en vigueur.
+
+**B.3 — Repérage des aides financières :** 3 aides citées par la doc (APL, prime d'activité, Mobili-Jeune), heuristiques d'éligibilité simples (âge/statut), redirection vers les simulateurs officiels — pas de recalcul interne, conforme à la doc ("pas de source officielle fiable identifiée").
+
+**Décision notable : API Entreprise remplacée par siret2idcc** (2026-09-19) — l'API Entreprise (entreprise.api.gouv.fr) prévue par la doc section 5 exige **ProConnect**, réservé aux agents publics et organismes habilités, inaccessible pour un projet personnel en phase de dev. Basculé sur **siret2idcc** (SocialGouv, `https://siret2idcc.fabrique.social.gouv.fr`), gratuite, sans authentification, mêmes données officielles (DSN/KALI). Validé avec le SIRET réel de Partner Informatique (33936266700042 — l'entreprise à l'origine personnelle du projet, doc section 3 B.2) : résout correctement la convention Syntec, qui déclenche une vraie détection de prime de vacances via Légifrance — la boucle B.1→B.2 complète tourne avec les données réelles qui ont inspiré Kelenda.
+
+**Détails techniques :**
+- Migrations : `salary_scales` (+ seed officiel), `collective_agreements`, `salary_simulations`, `prime_checks`, `aid_matches` — schéma section 9.3 tel quel.
+- `prime_manquante_detectee` et `aide_disponible_detectee` publiés sur NATS, testés avec de vrais subscribers.
+- Clés API stockées uniquement dans `.env` local (jamais commité) et en K8s Secret pour k3d — jamais passées en clair dans le code.
+
+**Validé en k3d avec Traefik forward-auth réel** (2026-09-19) — manifest `infra/k8s/12-finance-service.yaml`, route `kelenda-finance`. Fonctionne du premier coup. Testé avec de vrais appels sortants **depuis les pods du cluster** vers siret2idcc et Légifrance/PISTE (pas juste en local) — confirme que le réseau sortant et les secrets K8s sont correctement configurés.
+
+**Pas encore fait :**
+- Barème SMIC non automatisé (doc section 5 : "pas d'API temps réel officielle") — mise à jour manuelle à prévoir 1-2 fois/an dans `salary_scales`.
+- `expected_amount` sur `prime_checks` toujours `null` — le texte de la convention est trouvé mais son montant n'est pas extrait/parsé automatiquement (nécessiterait un parsing plus poussé du texte légal, hors périmètre MVP).
 
 ## 5. tracking-service + notification-service — ⬜
 
