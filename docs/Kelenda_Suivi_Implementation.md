@@ -77,11 +77,12 @@ Toutes les routes testées manuellement contre une vraie DB Postgres, y compris 
 - JWT vérifié localement par `calendar-service` (jamais confiance au seul `X-User-Id` Traefik, conforme au CLAUDE.md) — même convention dual-mode `JWT_PUBLIC_KEY`/`JWT_PUBLIC_KEY_PATH` qu'auth-service.
 - `Dockerfile` créé (même template qu'auth-service, fix `tsconfig.base.json` inclus dès le départ).
 
+**Validé en k3d avec Traefik forward-auth réel** (2026-09-18) — manifest `infra/k8s/11-calendar-service.yaml`, route `kelenda-calendar` (PathPrefix `/calendar`, protégée forward-auth) dans `20-traefik-routes.yaml`. A fonctionné du premier coup grâce au fix de l'ordre des env vars déjà identifié sur auth-service. Testé : register/login via Traefik, `GET`/`POST /calendar/sources` bloqués sans token (401) et fonctionnels avec token valide (200/201), JWT cross-service vérifié.
+
 **Pas encore fait :**
 - Sync CalDAV réelle (`caldav_perso`) — actuellement CRUD seul, la route `/sync` refuse ce type explicitement.
 - `deadline_approaching` (A.4, notifications progressives) — nécessite un job planifié, pas encore écrit.
 - `commute_estimates` / optimisation trajets (A.5) — schéma DB présent, aucune route ni logique.
-- Pas encore validé en k3d (seulement en local via `docker compose`, comme les étapes précédentes d'auth-service avant sa propre validation k3d).
 
 ## 4. finance-service — ⬜
 
