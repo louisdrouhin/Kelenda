@@ -149,6 +149,65 @@ router.post('/logout-all', requireAuth, async (req, res) => {
   return res.status(204).send();
 });
 
+router.get('/me', requireAuth, async (req, res) => {
+  const result = await pool.query(
+    'SELECT id, workspace_id, email, display_name, status, created_at FROM users WHERE id = $1',
+    [req.auth!.sub]
+  );
+
+  const user = result.rows[0];
+  if (!user) {
+    return res.status(404).json({ error: 'Utilisateur introuvable' });
+  }
+
+  return res.status(200).json(user);
+});
+
+router.patch('/me', requireAuth, async (req, res) => {
+  const { display_name } = req.body ?? {};
+
+  if (display_name !== undefined && typeof display_name !== 'string') {
+    return res.status(400).json({ error: 'display_name doit être une chaîne' });
+  }
+
+  const result = await pool.query(
+    'UPDATE users SET display_name = COALESCE($2, display_name) WHERE id = $1 RETURNING id, workspace_id, email, display_name, status, created_at, updated_at',
+    [req.auth!.sub, display_name ?? null]
+  );
+
+  const user = result.rows[0];
+  if (!user) {
+    return res.status(404).json({ error: 'Utilisateur introuvable' });
+  }
+
+  return res.status(200).json(user);
+});
+
+router.get('/sessions', requireAuth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT id, device_info, created_at, expires_at
+     FROM sessions
+     WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
+     ORDER BY created_at DESC`,
+    [req.auth!.sub]
+  );
+
+  return res.status(200).json(result.rows);
+});
+
+router.delete('/sessions/:id', requireAuth, async (req, res) => {
+  const result = await pool.query(
+    'UPDATE sessions SET revoked_at = now() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL RETURNING id',
+    [req.params.id, req.auth!.sub]
+  );
+
+  if (result.rowCount === 0) {
+    return res.status(404).json({ error: 'Session introuvable' });
+  }
+
+  return res.status(204).send();
+});
+
 async function issueSession(userId: string, workspaceId: string, deviceInfo: string | undefined) {
   const accessToken = signAccessToken(userId, workspaceId);
 
