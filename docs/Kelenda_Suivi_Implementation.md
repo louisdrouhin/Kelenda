@@ -51,7 +51,7 @@ Tous les endpoints de la doc section 10 sont implémentés et testés manuelleme
 
 **Validé en k3d avec Traefik forward-auth réel** (2026-09-18) — voir détails dans la section 7 ci-dessous.
 
-## 3. calendar-service — 🚧 (cœur A.1/A.2/A.3 fait et testé, CalDAV + A.4/A.5 restants)
+## 3. calendar-service — 🚧 (A.1/A.2/A.3 + serveur CalDAV faits et testés, A.4/A.5 restants)
 
 Toutes les routes testées manuellement contre une vraie DB Postgres, y compris cross-service (JWT signé par `auth-service`, vérifié par `calendar-service` via la clé publique partagée) et NATS réel (`mission_scheduled` reçu par un vrai subscriber).
 
@@ -62,7 +62,7 @@ Toutes les routes testées manuellement contre une vraie DB Postgres, y compris 
 | `GET /calendar/sources` | ✅ |
 | `PATCH /calendar/sources/:id` | ✅ |
 | `DELETE /calendar/sources/:id` | ✅ |
-| `POST /calendar/sources/:id/sync` | ✅ pour `ics_ecole`/`ics_entreprise` (fetch+parse ICS, upsert par `external_uid`) — ⬜ `caldav_perso` non supporté (400 explicite), voir "Trous connus" |
+| `POST /calendar/sources/:id/sync` | ✅ pour `ics_ecole`/`ics_entreprise` (fetch+parse ICS, upsert par `external_uid`) — `caldav_perso` n'est plus créable via cette route (voir serveur CalDAV ci-dessous) |
 | `GET /calendar/events` | ✅ (filtres `from`/`to`/`category`) |
 | `GET /calendar/events/:id` | ✅ |
 | `GET /calendar/free-slots` | ✅ (`from`/`to`/`min_duration_minutes`/`working_hours_start`/`working_hours_end`) |
@@ -79,8 +79,24 @@ Toutes les routes testées manuellement contre une vraie DB Postgres, y compris 
 
 **Validé en k3d avec Traefik forward-auth réel** (2026-09-18) — manifest `infra/k8s/11-calendar-service.yaml`, route `kelenda-calendar` (PathPrefix `/calendar`, protégée forward-auth) dans `20-traefik-routes.yaml`. A fonctionné du premier coup grâce au fix de l'ordre des env vars déjà identifié sur auth-service. Testé : register/login via Traefik, `GET`/`POST /calendar/sources` bloqués sans token (401) et fonctionnels avec token valide (200/201), JWT cross-service vérifié.
 
+### Serveur CalDAV (RFC 4791 + RFC 6578) — ✅ complet, testé via de vraies requêtes HTTP et validé en k3d
+
+Décision explicite (2026-09-18) : `caldav_perso` n'est **pas** un client qui importe en lecture un calendrier externe (symétrique à `ics_ecole`/`ics_entreprise`), mais un **serveur CalDAV que Kelenda héberge** — un vrai client (app Calendrier iPhone/macOS, Google Calendar) s'y connecte et y synchronise ses événements perso. Chantier substantiellement plus lourd que le reste (protocole WebDAV/XML, pas de client réel disponible pour tester — testé avec des requêtes `curl` reproduisant précisément ce qu'enverrait un vrai client : `PROPFIND`/`REPORT`/`PUT`/`DELETE`, Basic Auth, headers `If-Match`/`If-None-Match`).
+
+**Ce qui est livré et testé :**
+- **Auth dédiée** : `POST /calendar/caldav/credentials` (JWT) génère un mot de passe CalDAV à usage unique (jamais le mot de passe du compte), Basic Auth vérifié par `calendar-service` lui-même — nécessite une nouvelle paire interne `calendar-service → auth-service` (non prévue dans la doc initiale) pour résoudre l'email/username.
+- **Découverte** : `.well-known/caldav` (redirection RFC 6764), principal (`current-user-principal`, `calendar-home-set`), collection `personal` avec `supported-calendar-component-set: VEVENT`.
+- **Lecture** : `REPORT calendar-query` avec filtre `time-range` réellement parsé et appliqué (testé exclusion/inclusion), `GET` par événement avec ETag.
+- **Écriture** : `PUT` (création/modification selon existence) et `DELETE`, préconditions `If-Match`/`If-None-Match` conformes RFC 4791 §5.3 (testé : 412 sur ETag périmé, 412 sur double-création).
+- **Sync incrémentale** : `REPORT sync-collection` (RFC 6578), sync-token = watermark d'un log de changements dédié (`caldav_sync_changes`), testé : sync initiale, delta après création/modification, suppression annoncée en 404, cas limite création+suppression dans la même fenêtre correctement collapsé.
+- **Validé en k3d** : nouvelle IngressRoute `kelenda-calendar-caldav` (priorité 100, **sans** `forward-auth` — CalDAV parle Basic Auth, pas Bearer JWT, forward-auth casserait ces requêtes) testée avec `PROPFIND`/`PUT`/`REPORT` réels à travers Traefik.
+
+**Hors périmètre (documenté, pas un oubli) :**
+- Pas de support `RRULE` (récurrence), `VALARM` (rappels), `VTIMEZONE` — seuls des VEVENT simples avec horaires UTC.
+- Pas de purge de `caldav_sync_changes` (log de changements non borné dans le temps) — TODO noté dans la migration ; tant qu'il n'y a pas de purge, le cas RFC 6578 "token trop ancien → 507" ne se produit jamais.
+- Un seul calendrier `personal` par utilisateur (pas de multi-calendrier).
+
 **Pas encore fait :**
-- Sync CalDAV réelle (`caldav_perso`) — actuellement CRUD seul, la route `/sync` refuse ce type explicitement.
 - `deadline_approaching` (A.4, notifications progressives) — nécessite un job planifié, pas encore écrit.
 - `commute_estimates` / optimisation trajets (A.5) — schéma DB présent, aucune route ni logique.
 
