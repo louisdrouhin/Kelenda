@@ -14,7 +14,7 @@ const app = express();
 const port = process.env.PORT ?? 3002;
 
 app.use(express.json());
-app.use(express.text({ type: ['application/xml', 'text/xml'] }));
+app.use(express.text({ type: ['application/xml', 'text/xml', 'text/calendar'] }));
 
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok' });
