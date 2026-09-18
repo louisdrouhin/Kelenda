@@ -1,10 +1,13 @@
 import { Router } from 'express';
+import { detectConflictsForUser } from '../conflicts';
 import { pool } from '../db';
+import { categoryForSourceType, fetchAndParseIcs, type SourceTypeToCategory } from '../ics';
 import { requireAuth } from '../middleware/require-auth';
 
 const router = Router();
 
 const CREATABLE_TYPES = ['ics_ecole', 'ics_entreprise', 'caldav_perso'];
+const ICS_SYNCABLE_TYPES = ['ics_ecole', 'ics_entreprise'];
 
 router.post('/', requireAuth, async (req, res) => {
   const { type, label, url } = req.body ?? {};
@@ -65,6 +68,83 @@ router.patch('/:id', requireAuth, async (req, res) => {
   }
 
   return res.status(200).json(source);
+});
+
+router.post('/:id/sync', requireAuth, async (req, res) => {
+  const sourceResult = await pool.query(
+    'SELECT id, type, url FROM calendar_sources WHERE id = $1 AND user_id = $2',
+    [req.params.id, req.auth!.sub]
+  );
+
+  const source = sourceResult.rows[0];
+  if (!source) {
+    return res.status(404).json({ error: 'Source introuvable' });
+  }
+  if (!ICS_SYNCABLE_TYPES.includes(source.type)) {
+    return res.status(400).json({ error: `Synchronisation non supportée pour le type "${source.type}"` });
+  }
+
+  const category = categoryForSourceType(source.type as SourceTypeToCategory);
+
+  let parsedEvents;
+  try {
+    parsedEvents = await fetchAndParseIcs(source.url);
+  } catch (err) {
+    await pool.query("UPDATE calendar_sources SET sync_status = 'error' WHERE id = $1", [source.id]);
+    return res.status(502).json({ error: 'Échec de récupération ou de parsing du flux ICS' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const event of parsedEvents) {
+      await client.query(
+        `INSERT INTO events (source_id, external_uid, title, description, location, start_at, end_at, all_day, category, raw_ics_data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (source_id, external_uid) DO UPDATE SET
+           title = EXCLUDED.title,
+           description = EXCLUDED.description,
+           location = EXCLUDED.location,
+           start_at = EXCLUDED.start_at,
+           end_at = EXCLUDED.end_at,
+           all_day = EXCLUDED.all_day,
+           raw_ics_data = EXCLUDED.raw_ics_data`,
+        [
+          source.id,
+          event.externalUid,
+          event.title,
+          event.description,
+          event.location,
+          event.startAt,
+          event.endAt,
+          event.allDay,
+          category,
+          JSON.stringify(event.raw),
+        ]
+      );
+    }
+
+    await client.query(
+      "UPDATE calendar_sources SET sync_status = 'ok', last_synced_at = now() WHERE id = $1",
+      [source.id]
+    );
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    await pool.query("UPDATE calendar_sources SET sync_status = 'error' WHERE id = $1", [source.id]);
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const newConflictIds = await detectConflictsForUser(req.auth!.sub);
+
+  return res.status(200).json({
+    synced_events: parsedEvents.length,
+    new_conflicts: newConflictIds.length,
+  });
 });
 
 router.delete('/:id', requireAuth, async (req, res) => {
