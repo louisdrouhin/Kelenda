@@ -154,7 +154,7 @@ async function createUserFromOAuthProfile(
     const workspaceId = workspaceResult.rows[0].id;
 
     const userResult = await client.query(
-      'INSERT INTO users (workspace_id, email) VALUES ($1, $2) RETURNING id',
+      "INSERT INTO users (workspace_id, email, role) VALUES ($1, $2, 'admin') RETURNING id",
       [workspaceId, profile.email]
     );
     const userId = userResult.rows[0].id;

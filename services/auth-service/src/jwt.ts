@@ -13,16 +13,20 @@ const publicKey = fs.readFileSync(
 
 const ACCESS_TOKEN_TTL = '15m';
 
+export type UserRole = 'admin' | 'member';
+
 export interface AccessTokenPayload {
   sub: string; // user_id
   workspace_id: string;
+  role: UserRole;
   jti: string;
 }
 
-export function signAccessToken(userId: string, workspaceId: string): string {
+export function signAccessToken(userId: string, workspaceId: string, role: UserRole): string {
   const payload: AccessTokenPayload = {
     sub: userId,
     workspace_id: workspaceId,
+    role,
     jti: randomUUID(),
   };
 

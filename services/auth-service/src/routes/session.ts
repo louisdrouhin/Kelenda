@@ -9,7 +9,10 @@ function refreshTokenExpiry(): Date {
 }
 
 export async function issueSession(userId: string, workspaceId: string, deviceInfo: string | undefined) {
-  const accessToken = signAccessToken(userId, workspaceId);
+  const roleResult = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
+  const role = roleResult.rows[0]?.role ?? 'member';
+
+  const accessToken = signAccessToken(userId, workspaceId, role);
 
   const refreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(refreshToken);

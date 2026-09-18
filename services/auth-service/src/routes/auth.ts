@@ -28,7 +28,7 @@ router.post('/register', async (req, res) => {
     const workspaceId = workspaceResult.rows[0].id;
 
     const userResult = await client.query(
-      'INSERT INTO users (workspace_id, email) VALUES ($1, $2) RETURNING id, email, workspace_id',
+      "INSERT INTO users (workspace_id, email, role) VALUES ($1, $2, 'admin') RETURNING id, email, workspace_id",
       [workspaceId, email]
     );
     const user = userResult.rows[0];
@@ -147,7 +147,7 @@ router.post('/logout-all', requireAuth, async (req, res) => {
 
 router.get('/me', requireAuth, async (req, res) => {
   const result = await pool.query(
-    'SELECT id, workspace_id, email, display_name, status, created_at FROM users WHERE id = $1',
+    'SELECT id, workspace_id, email, display_name, role, status, created_at FROM users WHERE id = $1',
     [req.auth!.sub]
   );
 
@@ -167,7 +167,7 @@ router.patch('/me', requireAuth, async (req, res) => {
   }
 
   const result = await pool.query(
-    'UPDATE users SET display_name = COALESCE($2, display_name) WHERE id = $1 RETURNING id, workspace_id, email, display_name, status, created_at, updated_at',
+    'UPDATE users SET display_name = COALESCE($2, display_name) WHERE id = $1 RETURNING id, workspace_id, email, display_name, role, status, created_at, updated_at',
     [req.auth!.sub, display_name ?? null]
   );
 

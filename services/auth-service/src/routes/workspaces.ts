@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
+import { requireAdmin } from '../middleware/require-admin';
 import { requireAuth } from '../middleware/require-auth';
 
 const router = Router();
@@ -33,7 +34,7 @@ router.get('/:id', requireAuth, async (req, res) => {
   return res.status(200).json(workspace);
 });
 
-router.patch('/:id', requireAuth, async (req, res) => {
+router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
   if (req.params.id !== req.auth!.workspace_id) {
     return res.status(403).json({ error: 'Accès refusé à ce workspace' });
   }
