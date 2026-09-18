@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finance-service
+  namespace: kelenda
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: finance-service }
+  template:
+    metadata:
+      labels: { app: finance-service }
+    spec:
+      initContainers:
+        - name: migrate
+          image: kelenda-finance-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "node-pg-migrate", "up", "--migrations-dir", "services/finance-service/migrations"]
+          workingDir: /app
+          env:
+            # secretKeyRef déclaré AVANT la variable qui l'interpole, sinon
+            # $(...) ne se résout pas (cf. suivi d'implémentation).
+            - name: FINANCE_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: FINANCE_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://finance_service:$(FINANCE_DB_PASSWORD)@postgres:5432/finance_db"
+      containers:
+        - name: finance-service
+          image: kelenda-finance-service:local
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "services/finance-service/dist/index.js"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: FINANCE_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: FINANCE_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://finance_service:$(FINANCE_DB_PASSWORD)@postgres:5432/finance_db"
+            # Vérification JWT locale en filet de sécurité (défense en profondeur).
+            - name: JWT_PUBLIC_KEY
+              valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PUBLIC_KEY } }
+            - name: LEGIFRANCE_OAUTH_URL
+              value: "https://oauth.piste.gouv.fr/api/oauth/token"
+            - name: LEGIFRANCE_API_BASE_URL
+              value: "https://api.piste.gouv.fr/dila/legifrance/lf-engine-app"
+            - name: LEGIFRANCE_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: finance-service-secrets, key: LEGIFRANCE_CLIENT_ID } }
+            - name: LEGIFRANCE_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: finance-service-secrets, key: LEGIFRANCE_CLIENT_SECRET } }
+            - name: SIRET2IDCC_BASE_URL
+              value: "https://siret2idcc.fabrique.social.gouv.fr/api/v2"
+          resources:
+            requests: { cpu: 150m, memory: 150Mi }
+            limits: { cpu: 400m, memory: 300Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: finance-service
+  namespace: kelenda
+spec:
+  selector: { app: finance-service }
+  ports:
+    - port: 80
+      targetPort: 3000
