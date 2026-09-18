@@ -129,3 +129,26 @@ spec:
       services:
         - name: calendar-service
           port: 80
+---
+# Le serveur CalDAV (RFC 4791) parle HTTP Basic Auth, pas Bearer JWT — les
+# clients (app Calendrier iPhone/macOS) n'implémentent pas OAuth pour ce
+# protocole. forward-auth attend un Bearer et casserait ces requêtes ; c'est
+# calendar-service lui-même qui vérifie les credentials Basic Auth (voir
+# src/caldav/require-basic-auth.ts). Priorité plus haute que kelenda-calendar
+# pour que /calendar/caldav/* soit évalué en premier malgré le préfixe partagé.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kelenda-calendar-caldav
+  namespace: kelenda
+spec:
+  entryPoints: [web]
+  routes:
+    - match: PathPrefix(`/calendar/caldav`) || Path(`/.well-known/caldav`)
+      kind: Rule
+      priority: 100
+      middlewares:
+        - name: rate-limit
+      services:
+        - name: calendar-service
+          port: 80

@@ -46,6 +46,12 @@ spec:
             # il revérifie la signature lui-même et en dérive le user_id.
             - name: JWT_PUBLIC_KEY
               valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PUBLIC_KEY } }
+            # Paire interne calendar-service → auth-service (résolution d'email pour
+            # les credentials CalDAV, voir Kelenda_Suivi_Implementation.md).
+            - name: AUTH_SERVICE_INTERNAL_URL
+              value: "http://auth-service.kelenda.svc.cluster.local"
+            - name: INTERNAL_SECRET_CALENDAR_AUTH
+              valueFrom: { secretKeyRef: { name: internal-pair-calendar-auth, key: secret } }
           resources:
             requests: { cpu: 150m, memory: 150Mi }
             limits: { cpu: 400m, memory: 300Mi }

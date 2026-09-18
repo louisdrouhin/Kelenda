@@ -49,6 +49,8 @@ spec:
               valueFrom: { secretKeyRef: { name: internal-pair-tracking-auth, key: secret } }
             - name: INTERNAL_SECRET_NOTIFICATION_AUTH
               valueFrom: { secretKeyRef: { name: internal-pair-notification-auth, key: secret } }
+            - name: INTERNAL_SECRET_CALENDAR_AUTH
+              valueFrom: { secretKeyRef: { name: internal-pair-calendar-auth, key: secret } }
           resources:
             requests: { cpu: 100m, memory: 150Mi }
             limits: { cpu: 300m, memory: 300Mi }
