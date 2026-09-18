@@ -96,9 +96,17 @@ Décision explicite (2026-09-18) : `caldav_perso` n'est **pas** un client qui im
 - Pas de purge de `caldav_sync_changes` (log de changements non borné dans le temps) — TODO noté dans la migration ; tant qu'il n'y a pas de purge, le cas RFC 6578 "token trop ancien → 507" ne se produit jamais.
 - Un seul calendrier `personal` par utilisateur (pas de multi-calendrier).
 
+### A.4 — deadline_approaching — ✅ fait et testé (2026-09-18)
+
+- Migration : `events.is_deadline` (boolean, défaut false) + `deadline_notifications_sent` (déduplication par `(event_id, days_before)`).
+- `PATCH /calendar/events/:id` (nouveau) — l'utilisateur marque/démarque un événement comme deadline.
+- `src/deadline-job.ts` — job en boucle (`setInterval`, 1h par défaut, ajustable), paliers `[7, 3, 1, 0]` jours avant (valeurs choisies, la doc ne les fixe pas), publie `deadline_approaching` sur NATS avec le payload exact de la doc.
+- Testé avec un vrai subscriber NATS : publication sur les paliers atteints, aucune publication sur événement non-deadline ni hors fenêtre, déduplication vérifiée (deux exécutions du job = pas de doublon).
+- **Bug trouvé et corrigé** : le calcul initial de `days_before` (`Math.ceil` sur la durée exacte en millisecondes) faisait sauter le palier d'un jour dès que l'événement n'était pas exactement à minuit — un examen à 14h "dans 7 jours et 2h" matchait le palier 8, jamais 7. Remplacé par une comparaison de jours calendaires (minuit UTC à minuit UTC).
+- Pas encore testé en k3d (le job tourne en `setInterval` dans le process — pas de souci particulier attendu, mais pas vérifié).
+
 **Pas encore fait :**
-- `deadline_approaching` (A.4, notifications progressives) — nécessite un job planifié, pas encore écrit.
-- `commute_estimates` / optimisation trajets (A.5) — schéma DB présent, aucune route ni logique.
+- `commute_estimates` / optimisation trajets (A.5) — schéma DB présent, aucune route ni logique. Marqué "idée secondaire, faible priorité" dans la doc (section 3, A.5).
 
 ## 4. finance-service — ⬜
 
