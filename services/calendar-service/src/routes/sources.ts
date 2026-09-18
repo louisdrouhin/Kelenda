@@ -6,7 +6,12 @@ import { requireAuth } from '../middleware/require-auth';
 
 const router = Router();
 
-const CREATABLE_TYPES = ['ics_ecole', 'ics_entreprise', 'caldav_perso'];
+// caldav_perso n'est PAS créable manuellement : le serveur CalDAV (voir
+// src/caldav/source.ts) la crée automatiquement au premier accès. Kelenda
+// héberge son propre calendrier CalDAV (RFC 4791) plutôt que de se connecter
+// en lecture à un serveur externe — décision explicite, différente d'une
+// lecture initiale possible de "calendrier CalDAV dédié" dans la doc A.1.
+const CREATABLE_TYPES = ['ics_ecole', 'ics_entreprise'];
 const ICS_SYNCABLE_TYPES = ['ics_ecole', 'ics_entreprise'];
 
 router.post('/', requireAuth, async (req, res) => {

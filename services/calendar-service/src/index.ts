@@ -4,6 +4,7 @@ import 'express-async-errors';
 import { requireBasicAuth } from './caldav/require-basic-auth';
 import { caldavCredentialsRouter } from './routes/caldav-credentials';
 import { caldavDiscoveryRouter } from './routes/caldav-discovery';
+import { caldavEventsRouter } from './routes/caldav-events';
 import { conflictsRouter } from './routes/conflicts';
 import { eventsRouter } from './routes/events';
 import { freeSlotsRouter } from './routes/free-slots';
@@ -32,6 +33,7 @@ app.use('/calendar/events', eventsRouter);
 app.use('/calendar/conflicts', conflictsRouter);
 app.use('/calendar/free-slots', freeSlotsRouter);
 app.use('/calendar/caldav/credentials', caldavCredentialsRouter);
+app.use('/calendar/caldav', caldavEventsRouter);
 app.use('/calendar/caldav', caldavDiscoveryRouter);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
