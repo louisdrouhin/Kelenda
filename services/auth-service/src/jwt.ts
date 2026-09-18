@@ -2,14 +2,15 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import jwt from 'jsonwebtoken';
 
-const privateKey = fs.readFileSync(
-  process.env.JWT_PRIVATE_KEY_PATH ?? './keys/jwt-private.pem',
-  'utf8'
-);
-const publicKey = fs.readFileSync(
-  process.env.JWT_PUBLIC_KEY_PATH ?? './keys/jwt-public.pem',
-  'utf8'
-);
+function loadKey(envValue: string | undefined, envPath: string | undefined, defaultPath: string): string {
+  if (envValue) return envValue;
+  return fs.readFileSync(envPath ?? defaultPath, 'utf8');
+}
+
+// JWT_PRIVATE_KEY/JWT_PUBLIC_KEY (valeur PEM directe, utilisé en K8s via Secret — doc section 12.4)
+// a priorité sur JWT_PRIVATE_KEY_PATH/JWT_PUBLIC_KEY_PATH (fichier, utilisé en dev local).
+const privateKey = loadKey(process.env.JWT_PRIVATE_KEY, process.env.JWT_PRIVATE_KEY_PATH, './keys/jwt-private.pem');
+const publicKey = loadKey(process.env.JWT_PUBLIC_KEY, process.env.JWT_PUBLIC_KEY_PATH, './keys/jwt-public.pem');
 
 const ACCESS_TOKEN_TTL = '15m';
 

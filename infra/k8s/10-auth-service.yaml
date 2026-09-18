@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: kelenda
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: auth-service }
+  template:
+    metadata:
+      labels: { app: auth-service }
+    spec:
+      initContainers:
+        - name: migrate
+          image: kelenda-auth-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "node-pg-migrate", "up", "--migrations-dir", "services/auth-service/migrations"]
+          workingDir: /app
+          env:
+            - name: AUTH_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: AUTH_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://auth_service:$(AUTH_DB_PASSWORD)@postgres:5432/auth_db"
+      containers:
+        - name: auth-service
+          image: kelenda-auth-service:local
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "services/auth-service/dist/index.js"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: AUTH_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: AUTH_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://auth_service:$(AUTH_DB_PASSWORD)@postgres:5432/auth_db"
+            - name: JWT_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PRIVATE_KEY } }
+            - name: JWT_PUBLIC_KEY
+              valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PUBLIC_KEY } }
+            - name: OAUTH_TOKEN_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: auth-service-secrets, key: OAUTH_TOKEN_ENCRYPTION_KEY } }
+            - name: INTERNAL_SECRET_TRACKING_AUTH
+              valueFrom: { secretKeyRef: { name: internal-pair-tracking-auth, key: secret } }
+            - name: INTERNAL_SECRET_NOTIFICATION_AUTH
+              valueFrom: { secretKeyRef: { name: internal-pair-notification-auth, key: secret } }
+          resources:
+            requests: { cpu: 100m, memory: 150Mi }
+            limits: { cpu: 300m, memory: 300Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: kelenda
+spec:
+  selector: { app: auth-service }
+  ports:
+    - port: 80
+      targetPort: 3000

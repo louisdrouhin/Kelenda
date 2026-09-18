@@ -1,0 +1,118 @@
+# ============================================================
+# Routage Traefik (CRDs IngressRoute/Middleware — Traefik est déjà
+# l'ingress controller par défaut de K3s, rien à déployer en plus).
+# ============================================================
+
+# --- Middlewares ---------------------------------------------
+
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: forward-auth
+  namespace: kelenda
+spec:
+  forwardAuth:
+    address: "http://auth-service.kelenda.svc.cluster.local/auth/verify"
+    authResponseHeaders:
+      - X-User-Id
+      - X-Workspace-Id
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  namespace: kelenda
+spec:
+  rateLimit:
+    average: 100
+    burst: 50
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit-auth-strict
+  namespace: kelenda
+spec:
+  # Limite basse spécifique à /auth/login et /auth/register — protection brute-force.
+  rateLimit:
+    average: 5
+    burst: 10
+---
+# Utilisé uniquement par la route de test forward-auth ci-dessous, pour
+# renvoyer le préfixe vers /health côté auth-service une fois le forward-auth
+# validé par Traefik.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-forward-auth-test-prefix
+  namespace: kelenda
+spec:
+  stripPrefix:
+    prefixes:
+      - /_forward-auth-test
+
+# --- Routes ----------------------------------------------------
+# Note : /auth/register et /auth/login sont volontairement séparés du
+# reste de /auth — impossible d'appliquer forward-auth avant d'avoir un
+# token. Les routes /auth protégées (me, sessions, link...) sont
+# vérifiées par auth-service lui-même, qui a déjà toute la logique JWT
+# nécessaire — pas besoin de la dupliquer via un forward-auth vers lui-même.
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kelenda-auth-public
+  namespace: kelenda
+spec:
+  entryPoints: [web]
+  routes:
+    - match: Path(`/auth/register`) || Path(`/auth/login`) || PathPrefix(`/auth/login/`) || PathPrefix(`/auth/callback/`) || Path(`/auth/refresh`)
+      kind: Rule
+      middlewares:
+        - name: rate-limit-auth-strict
+      services:
+        - name: auth-service
+          port: 80
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kelenda-auth-rest
+  namespace: kelenda
+spec:
+  entryPoints: [web]
+  routes:
+    - match: PathPrefix(`/auth`) || PathPrefix(`/workspaces`)
+      kind: Rule
+      middlewares:
+        - name: rate-limit
+      services:
+        - name: auth-service
+          port: 80
+---
+# Route de test pour valider le forward-auth réel (pas un vrai service métier —
+# calendar-service n'existe pas encore). Réutilise le /health d'auth-service
+# comme backend derrière le middleware forward-auth, juste pour vérifier que
+# Traefik appelle bien /auth/verify et injecte X-User-Id/X-Workspace-Id avant
+# de proxifier — /health répond toujours 200, donc les headers de la réponse
+# du BACKEND ne servent à rien ici : ce qui compte est de vérifier que la
+# requête ATTEINT le backend uniquement avec un token valide (401 sinon).
+# À remplacer par une vraie route calendar-service une fois ce service prêt.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kelenda-forward-auth-test
+  namespace: kelenda
+spec:
+  entryPoints: [web]
+  routes:
+    - match: PathPrefix(`/_forward-auth-test`)
+      kind: Rule
+      middlewares:
+        - name: forward-auth
+        - name: rate-limit
+        - name: strip-forward-auth-test-prefix
+      services:
+        - name: auth-service
+          port: 80

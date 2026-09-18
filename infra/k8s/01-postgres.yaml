@@ -1,0 +1,128 @@
+# ============================================================
+# PostgreSQL — instance unique, une base + un rôle par service
+# (décision : cf. section 5 du suivi de projet — jamais de DB
+# partagée, mais une seule instance pour limiter la charge
+# opérationnelle sur le homelab).
+# ============================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secrets
+  namespace: kelenda
+type: Opaque
+stringData:
+  POSTGRES_SUPERUSER_PASSWORD: "CHANGE_ME"
+  AUTH_DB_PASSWORD: "CHANGE_ME"
+  CALENDAR_DB_PASSWORD: "CHANGE_ME"
+  FINANCE_DB_PASSWORD: "CHANGE_ME"
+  TRACKING_DB_PASSWORD: "CHANGE_ME"
+  NOTIFICATION_DB_PASSWORD: "CHANGE_ME"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: kelenda
+data:
+  # Exécuté automatiquement au premier démarrage par l'image officielle postgres
+  # (tout script .sh placé dans /docker-entrypoint-initdb.d est lancé une fois).
+  init-databases.sh: |
+    #!/bin/bash
+    set -e
+    for pair in "auth:$AUTH_DB_PASSWORD" \
+                "calendar:$CALENDAR_DB_PASSWORD" \
+                "finance:$FINANCE_DB_PASSWORD" \
+                "tracking:$TRACKING_DB_PASSWORD" \
+                "notification:$NOTIFICATION_DB_PASSWORD"; do
+      svc="${pair%%:*}"
+      pass="${pair##*:}"
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<EOSQL
+    CREATE USER ${svc}_service WITH PASSWORD '${pass}';
+    CREATE DATABASE ${svc}_db OWNER ${svc}_service;
+    REVOKE ALL ON DATABASE ${svc}_db FROM PUBLIC;
+    GRANT ALL PRIVILEGES ON DATABASE ${svc}_db TO ${svc}_service;
+    EOSQL
+    done
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: kelenda
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-secrets, key: POSTGRES_SUPERUSER_PASSWORD }
+            - name: AUTH_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-secrets, key: AUTH_DB_PASSWORD }
+            - name: CALENDAR_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-secrets, key: CALENDAR_DB_PASSWORD }
+            - name: FINANCE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-secrets, key: FINANCE_DB_PASSWORD }
+            - name: TRACKING_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-secrets, key: TRACKING_DB_PASSWORD }
+            - name: NOTIFICATION_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-secrets, key: NOTIFICATION_DB_PASSWORD }
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata   # évite le souci lost+found au premier init
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres"] }
+            initialDelaySeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres"] }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init-scripts
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: 5Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: kelenda
+spec:
+  clusterIP: None   # headless — un seul pod, pas besoin de load-balancing
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
