@@ -1,6 +1,6 @@
 # Kelenda — Suivi d'implémentation
 
-Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (tracking-service validé en k3d, premier déploiement réel de NATS JetStream en cluster).
+Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (notification-service livré et validé en k3d — les 5 services ont maintenant tous une première implémentation complète).
 
 Légende : ✅ fait et testé — 🚧 en cours / partiel — ⬜ pas commencé
 
@@ -144,7 +144,7 @@ Tous les endpoints testés avec de **vrais appels API externes** (pas de mocks) 
 - Barème SMIC non automatisé (doc section 5 : "pas d'API temps réel officielle") — mise à jour manuelle à prévoir 1-2 fois/an dans `salary_scales`.
 - `expected_amount` sur `prime_checks` toujours `null` — le texte de la convention est trouvé mais son montant n'est pas extrait/parsé automatiquement (nécessiterait un parsing plus poussé du texte légal, hors périmètre MVP).
 
-## 5. tracking-service + notification-service — 🚧 (tracking-service : ✅ endpoints + validé en k3d ; notification-service pas commencé)
+## 5. tracking-service + notification-service — ✅ (les deux : endpoints + validés en k3d)
 
 ### tracking-service — ✅ (branche `dev-tracking-service`)
 
@@ -187,13 +187,40 @@ Tous les endpoints testés avec de **vrais appels API externes** (pas de mocks) 
 - `GET /internal/events/:id` côté calendar-service et la paire `tracking→calendar` (HMAC) — nécessaire seulement pour la liaison manuelle mission↔événement (pas utilisée par le consumer `mission_scheduled`, qui est auto-suffisant).
 - Paire `tracking→auth-service` (`GET /internal/users/:id`) — nécessaire pour l'en-tête des rapports d'activité (nom/email de l'utilisateur), pas encore branchée.
 
-### notification-service — ⬜
+### notification-service — ✅ (branche `dev-notification-service`)
 
-Pas commencé.
+**Endpoints livrés :**
+| Endpoint | Statut |
+|---|---|
+| `POST /notifications/subscribe` | ✅ (upsert par `endpoint`) |
+| `DELETE /notifications/subscribe/:id` | ✅ |
+| `GET /notifications/preferences` | ✅ |
+| `PATCH /notifications/preferences` | ✅ |
+| `GET /notifications/logs` | ✅ |
+
+**Détails techniques livrés :**
+- Migration : `push_subscriptions`, `notification_preferences`, `notification_logs` (schéma section 9.5 tel quel).
+- Consumer NATS (`src/event-consumer.ts`) : un abonnement dédié par événement (`kelenda.<service>.<event_type>`) plutôt qu'un wildcard groupé — NATS ne supporte que `*`/`>` comme wildcards, pas de syntaxe `{a,b,c}` malgré ce que suggérait la doc. Couvre les 8 événements du catalogue (section 11) : `deadline_approaching`, `conflit_planning_detecte`, `prime_manquante_detectee`, `aide_disponible_detectee`, `tutor_interaction_upcoming`, `rapport_genere`, `rapport_a_generer_bientot`, `user_registered`.
+- Dispatcher (`src/dispatcher.ts`) : pour chaque événement, vérifie la préférence par canal (**décision : pas de ligne en base = canal activé par défaut**, opt-out plutôt qu'opt-in, pour qu'une notification fonctionne dès l'inscription sans réglage préalable), envoie sur `web_push` (toutes les souscriptions de l'utilisateur) et `email` (adresse résolue via la paire interne `notification-service→auth-service`), logge chaque tentative dans `notification_logs` (`sent`/`failed`) — un canal en échec n'empêche pas l'autre.
+- **Web push réel** : librairie `web-push` officielle (VAPID), pas de mock.
+- **Email réel** : `nodemailer` + SMTP générique par variables d'env (host/port/user/password) — pas de SDK propriétaire (Resend/SendGrid), un provider SMTP standard fonctionne sans code dédié. **Testé avec un vrai compte Infomaniak** (`mail.infomaniak.com:587`, STARTTLS).
+- `Dockerfile` créé (même template que les 4 autres services).
+
+**Testé en local (vraie DB Postgres, vrai NATS, vrai auth-service, vrai SMTP) :**
+- Email réellement envoyé et reçu (confirmé par l'utilisateur) pour `deadline_approaching` et `user_registered`.
+- Préférence désactivée (`email`/`deadline_approaching`) vérifiée bloquante : republication du même événement → aucun nouveau log créé.
+- Web push : échec propre et loggé `failed` avec une fausse clé de souscription (validation de format par `web-push` lui-même côté client — confirme l'intégration réelle à la lib) ; pas de vraie souscription testable sans navigateur.
+- CRUD complet des endpoints REST, 401 sans token, 400 sur `event_type` invalide, 204 sur DELETE.
+
+**Validé en k3d avec Traefik forward-auth réel, NATS JetStream réel et appel HMAC interne réel** (2026-09-19) — manifest `infra/k8s/14-notification-service.yaml`, secret dédié `notification-service-secrets` (VAPID/SMTP), route `kelenda-notification`. Testé : register/login via Traefik, `GET`/`PATCH /notifications/preferences` bloqués sans token (401) et fonctionnels avec token valide, un `user_registered` publié depuis l'extérieur du cluster consommé par le pod, appel HMAC réel pod-à-pod vers `auth-service` pour résoudre l'email, **email réellement envoyé depuis le cluster et reçu** (confirmé). `/internal` non exposé publiquement (404).
+
+**Pas encore fait :**
+- Pas de vraie souscription web push testée (nécessiterait un navigateur réel avec Service Worker) — le format de clé n'a été validé qu'en échec contrôlé.
+- Pas de job planifié pour générer `tutor_interaction_upcoming` ou `rapport_a_generer_bientot` côté tracking-service — ces deux événements existent dans le consumer mais rien ne les publie encore (tracking-service n'a pas ces jobs, contrairement à `deadline-job.ts` côté calendar-service pour A.4).
 
 ## 6. Intégration événementielle bout-en-bout — ⬜
 
-Pas commencé.
+Pas commencé formellement (scénario complet documenté et scripté de bout en bout), mais les briques sont maintenant validées séparément : `mission_scheduled` (calendar→tracking) et `user_registered`/`deadline_approaching` (auth,calendar→notification) fonctionnent réellement en cluster k3d, chacun testé indépendamment lors de la validation de tracking-service et notification-service. Reste à dérouler explicitement le scénario du plan ("accepter une suggestion de révision → mission créée → notification envoyée") en une seule fois, avec les 5 services déployés simultanément.
 
 ## 7. Déploiement homelab + sécurité réseau — 🚧 (validation auth-service faite, reste le homelab réel)
 
@@ -202,7 +229,7 @@ Pas commencé.
 - `services/auth-service/Dockerfile` créé (template doc section 14, avec deux corrections : ajout de `tsconfig.base.json` manquant du contexte de build, point d'entrée `dist/index.js` au lieu de `dist/main.js` pour matcher le code réel).
 - Testé bout-en-bout via Traefik (`http://localhost:8080`, entryPoint `web` HTTP — pas `websecure`/TLS, pas encore configuré) : `register` → `login` → `GET /auth/me` (JWT vérifié par le service lui-même) → forward-auth (401 sans token, 200 + headers injectés avec token valide, confirmé aussi dans les logs Traefik) → `/internal/*` confirmé non exposé publiquement (404, aucune IngressRoute ne le sert).
 
-**Bug trouvé et corrigé dans le manifest** (touche les 5 services, pas seulement auth-service) : dans un `Deployment`, la substitution `$(VAR)` façon `DATABASE_URL: "postgresql://user:$(PASSWORD)@host/db"` ne se résout **que si `PASSWORD` est déclarée AVANT `DATABASE_URL`** dans la liste `env`. La doc section 12.4 (et donc 12.5 à 12.8 par le même pattern) déclare `DATABASE_URL` avant le secret qu'elle référence — ça échoue silencieusement (le literal `$(PASSWORD)` est envoyé tel quel à Postgres, qui rejette l'auth sans message clair côté appelant). **Corrigé dès l'écriture** dans `10-auth-service.yaml`, `11-calendar-service.yaml`, `12-finance-service.yaml` et `13-tracking-service.yaml` (secretKeyRef déclaré avant la variable qui l'interpole) — fonctionne du premier coup à chaque fois depuis. **Reste à appliquer** quand `notification-service` sera écrit (14-*.yaml).
+**Bug trouvé et corrigé dans le manifest** (touche les 5 services, pas seulement auth-service) : dans un `Deployment`, la substitution `$(VAR)` façon `DATABASE_URL: "postgresql://user:$(PASSWORD)@host/db"` ne se résout **que si `PASSWORD` est déclarée AVANT `DATABASE_URL`** dans la liste `env`. La doc section 12.4 (et donc 12.5 à 12.8 par le même pattern) déclare `DATABASE_URL` avant le secret qu'elle référence — ça échoue silencieusement (le literal `$(PASSWORD)` est envoyé tel quel à Postgres, qui rejette l'auth sans message clair côté appelant). **Corrigé dès l'écriture** dans les 5 manifests (`10-auth-service.yaml` à `14-notification-service.yaml`, secretKeyRef déclaré avant la variable qui l'interpole) — fonctionne du premier coup à chaque fois depuis. Plus aucun service en attente sur ce point.
 
 **NATS JetStream déployé et validé en cluster** (2026-09-19, avec tracking-service) — `infra/k8s/nats-values.yaml` (doc section 12.10) installé via Helm (`helm install nats nats/nats -n kelenda -f nats-values.yaml`), premier test réel d'un publisher externe + consumer en pod fonctionnant de bout en bout.
 
@@ -222,7 +249,9 @@ Pas commencé (React + Vite SPA, PWA).
 - **Panel admin** (`PATCH /users/:id/role` ou équivalent) — permettre à un admin de promouvoir/rétrograder un membre de son workspace. Nécessaire maintenant que tout compte démarre `member` : sans ce panel, aucun workspace ne peut avoir d'admin. Backend : endpoint protégé par `requireAdmin` (middleware déjà en place). Frontend : écran dédié, à construire en phase 8.
 - **Pas de table de membership multi-users** (`workspace_members` ou équivalent) — le schéma actuel (doc section 9.1) lie un `user` à un seul `workspace_id` fixe. `POST /workspaces` crée un workspace indépendant sans y rattacher automatiquement le créateur. Si Kelenda doit permettre à un utilisateur d'appartenir à plusieurs workspaces, ou un rôle différent par workspace, ça demandera une migration de refonte (colonne `workspace_id` sur `users` → table de jointure).
 - **OAuth testé en réel uniquement avec Microsoft** (Google et GitHub ont le même code générique mais n'ont pas été testés avec de vrais credentials).
-- **Bug de manifest `$(VAR)`** (voir section 7) déjà corrigé pour auth/calendar/finance/tracking-service — reste à appliquer pour notification-service au moment de son écriture.
+- **Bug de manifest `$(VAR)`** (voir section 7) corrigé dans les 5 services dès leur écriture — plus rien en attente sur ce point.
+- **`tutor_interaction_upcoming` et `rapport_a_generer_bientot` jamais publiés** — notification-service les consomme (consumer NATS branché), mais tracking-service n'a pas encore les jobs planifiés qui les émettraient (rien d'équivalent à `deadline-job.ts` côté calendar-service pour l'instant).
+- **Web push jamais testé avec une vraie souscription navigateur** — seule la validation de format côté librairie (échec avec une fausse clé) a été vérifiée pour notification-service.
 - **NetworkPolicies, TLS, NATS pas encore testés en cluster** (voir section 7, "reste à faire").
 - **Pas de route de création de référentiel de compétences côté tracking-service** — un `competency_frameworks`/`competency_nodes` (ex. CESI) doit être inséré directement en base tant qu'aucun outil d'admin n'existe ; la doc (section 10) ne prévoit aucun endpoint pour ça.
 - **Pas de génération PDF réelle pour les rapports d'activité** — `GET /tracking/reports/:id/download` sert toujours le snapshot JSON, quel que soit le `format` choisi à la génération.
