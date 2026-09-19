@@ -39,6 +39,8 @@ spec:
               valueFrom: { secretKeyRef: { name: postgres-secrets, key: AUTH_DB_PASSWORD } }
             - name: DATABASE_URL
               value: "postgresql://auth_service:$(AUTH_DB_PASSWORD)@postgres:5432/auth_db"
+            - name: NATS_URL
+              value: "nats://nats:4222"
             - name: JWT_PRIVATE_KEY
               valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PRIVATE_KEY } }
             - name: JWT_PUBLIC_KEY

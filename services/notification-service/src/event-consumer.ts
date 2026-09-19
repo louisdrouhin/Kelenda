@@ -16,6 +16,7 @@ const SUBJECT_BY_EVENT_TYPE: Record<NotifiableEventType, string> = {
   rapport_genere: 'kelenda.tracking.rapport_genere',
   rapport_a_generer_bientot: 'kelenda.tracking.rapport_a_generer_bientot',
   user_registered: 'kelenda.auth.user_registered',
+  mission_creee: 'kelenda.tracking.mission_creee',
 };
 
 export async function startEventConsumer(): Promise<void> {

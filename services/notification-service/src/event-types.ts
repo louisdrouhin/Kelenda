@@ -9,6 +9,7 @@ export const NOTIFIABLE_EVENT_TYPES = [
   'rapport_genere',
   'rapport_a_generer_bientot',
   'user_registered',
+  'mission_creee',
 ] as const;
 
 export type NotifiableEventType = (typeof NOTIFIABLE_EVENT_TYPES)[number];

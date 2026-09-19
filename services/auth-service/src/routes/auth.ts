@@ -1,3 +1,4 @@
+import { publishEvent } from '@kelenda/shared';
 import bcrypt from 'bcrypt';
 import { Router } from 'express';
 import { pool } from '../db';
@@ -11,7 +12,7 @@ const router = Router();
 const BCRYPT_ROUNDS = 12;
 
 router.post('/register', async (req, res) => {
-  const { email, password, workspace_name } = req.body ?? {};
+  const { email, password, workspace_name, display_name } = req.body ?? {};
 
   if (typeof email !== 'string' || typeof password !== 'string' || typeof workspace_name !== 'string') {
     return res.status(400).json({ error: 'email, password et workspace_name sont requis' });
@@ -28,8 +29,8 @@ router.post('/register', async (req, res) => {
     const workspaceId = workspaceResult.rows[0].id;
 
     const userResult = await client.query(
-      'INSERT INTO users (workspace_id, email) VALUES ($1, $2) RETURNING id, email, workspace_id',
-      [workspaceId, email]
+      'INSERT INTO users (workspace_id, email, display_name) VALUES ($1, $2, $3) RETURNING id, email, workspace_id, display_name',
+      [workspaceId, email, display_name ?? null]
     );
     const user = userResult.rows[0];
 
@@ -40,6 +41,17 @@ router.post('/register', async (req, res) => {
     ]);
 
     await client.query('COMMIT');
+
+    // user_registered (doc section 11) — notification-service envoie le
+    // message de bienvenue. Best-effort : NATS_URL non configuré ne doit
+    // pas empêcher l'inscription (même convention que les autres services).
+    if (process.env.NATS_URL) {
+      await publishEvent(process.env.NATS_URL, 'auth', 'user_registered', {
+        user_id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+      });
+    }
 
     return res.status(201).json({
       id: user.id,

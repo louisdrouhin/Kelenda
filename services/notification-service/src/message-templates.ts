@@ -51,5 +51,10 @@ export function buildMessage(eventType: NotifiableEventType, payload: Record<str
         title: 'Bienvenue sur Kelenda',
         body: `Bienvenue ${payload.display_name ?? ''}, votre compte est prêt.`.trim(),
       };
+    case 'mission_creee':
+      return {
+        title: 'Nouvelle mission suggérée',
+        body: `« ${payload.title} » a été ajoutée à votre suivi (${payload.start_date}).`,
+      };
   }
 }
