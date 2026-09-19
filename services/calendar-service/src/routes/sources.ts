@@ -94,7 +94,7 @@ router.post('/:id/sync', requireAuth, async (req, res) => {
   let parsedEvents;
   try {
     parsedEvents = await fetchAndParseIcs(source.url);
-  } catch (err) {
+  } catch {
     await pool.query("UPDATE calendar_sources SET sync_status = 'error' WHERE id = $1", [source.id]);
     return res.status(502).json({ error: 'Échec de récupération ou de parsing du flux ICS' });
   }
