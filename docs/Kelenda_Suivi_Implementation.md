@@ -1,6 +1,6 @@
 # Kelenda — Suivi d'implémentation
 
-Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19**.
+Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (tracking-service : missions + consumer NATS).
 
 Légende : ✅ fait et testé — 🚧 en cours / partiel — ⬜ pas commencé
 
@@ -144,9 +144,48 @@ Tous les endpoints testés avec de **vrais appels API externes** (pas de mocks) 
 - Barème SMIC non automatisé (doc section 5 : "pas d'API temps réel officielle") — mise à jour manuelle à prévoir 1-2 fois/an dans `salary_scales`.
 - `expected_amount` sur `prime_checks` toujours `null` — le texte de la convention est trouvé mais son montant n'est pas extrait/parsé automatiquement (nécessiterait un parsing plus poussé du texte légal, hors périmètre MVP).
 
-## 5. tracking-service + notification-service — ⬜
+## 5. tracking-service + notification-service — 🚧 (tracking-service : missions + consumer NATS faits et testés, reste compétences/tuteurs/rapports ; notification-service pas commencé)
 
-Pas commencé. Dépend d'un pub/sub NATS fonctionnel de bout en bout.
+### tracking-service (branche `dev-tracking-service`)
+
+**Endpoints livrés :**
+| Endpoint | Statut |
+|---|---|
+| `POST /tracking/missions` | ✅ |
+| `GET /tracking/missions` | ✅ (filtre `status`) |
+| `GET /tracking/missions/:id` | ✅ |
+| `PATCH /tracking/missions/:id` | ✅ |
+| `DELETE /tracking/missions/:id` | ✅ |
+| `GET /tracking/frameworks/:school` | ⬜ **à construire** |
+| `GET /tracking/competencies` | ⬜ **à construire** |
+| `PATCH /tracking/competencies/:node_id` | ⬜ **à construire** |
+| `POST /tracking/missions/:id/competencies` | ⬜ **à construire** |
+| `GET /tracking/tutors` | ⬜ **à construire** |
+| `POST /tracking/tutors` | ⬜ **à construire** |
+| `PATCH /tracking/tutors/:id` | ⬜ **à construire** |
+| `POST /tracking/tutors/:id/interactions` | ⬜ **à construire** |
+| `GET /tracking/tutors/:id/interactions` | ⬜ **à construire** |
+| `POST /tracking/reports/generate` | ⬜ **à construire** |
+| `GET /tracking/reports` | ⬜ **à construire** |
+| `GET /tracking/reports/:id/download` | ⬜ **à construire** |
+
+**Détails techniques livrés :**
+- Migration : `missions` uniquement pour cette passe (schéma section 9.4 tel quel) — `competency_frameworks`/`competency_nodes`/`competency_entries`/`mission_competency_links`/`tutors`/`tutor_interactions`/`activity_reports` pas encore créées.
+- Consumer NATS `kelenda.calendar.mission_scheduled` (`src/mission-scheduled-consumer.ts`) : crée automatiquement une mission `source='suggested'` avec `related_event_id`, sans appel synchrone à calendar-service (payload de l'événement auto-suffisant, conforme doc section 11). Testé avec un vrai événement publié sur NATS.
+- JWT vérifié localement (même convention `JWT_PUBLIC_KEY`/`JWT_PUBLIC_KEY_PATH` que les autres services).
+- **Bug trouvé et corrigé** : le driver `pg` parse une colonne `date` en objet `Date` puis le sérialise en heure locale du process — `start_date`/`end_date` revenaient décalés d'un jour en JSON (`2026-09-20` → `2026-09-19T22:00:00.000Z` en UTC+2). Fixé via un `types.setTypeParser` dédié dans `db.ts` qui garde la chaîne `YYYY-MM-DD` brute.
+- `Dockerfile` créé (même template que les 3 autres services, fix `tsconfig.base.json`/`dist/index.js` appliqué dès l'écriture — pas besoin de le redécouvrir comme pour auth-service).
+- Testé contre une vraie DB Postgres locale et un vrai broker NATS local (pas encore en k3d) : CRUD complet, validations, 401 sans token, création automatique de mission via événement réel.
+
+**Pas encore fait :**
+- Compétences (C.2), tuteurs (C.3), rapports d'activité (C.1) — schéma DB et endpoints, prochaine passe.
+- `GET /internal/events/:id` côté calendar-service et la paire `tracking→calendar` (HMAC) — nécessaire seulement pour la liaison manuelle mission↔événement (pas utilisée par le consumer `mission_scheduled`, qui est auto-suffisant).
+- Paire `tracking→auth-service` (`GET /internal/users/:id`) — nécessaire pour l'en-tête des rapports d'activité, pas encore construits.
+- Pas encore validé en k3d.
+
+### notification-service — ⬜
+
+Pas commencé.
 
 ## 6. Intégration événementielle bout-en-bout — ⬜
 
