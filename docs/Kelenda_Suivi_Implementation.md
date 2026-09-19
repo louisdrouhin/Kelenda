@@ -1,6 +1,6 @@
 # Kelenda — Suivi d'implémentation
 
-Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (intégration événementielle bout-en-bout validée avec les 5 services déployés simultanément en k3d, phase 6 du plan).
+Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (pipeline CI GitHub Actions livré et validé par un vrai run — reste le déploiement homelab réel, hors de portée sans accès direct à la machine).
 
 Légende : ✅ fait et testé — 🚧 en cours / partiel — ⬜ pas commencé
 
@@ -245,10 +245,19 @@ Scénario du plan ("accepter une suggestion de révision → mission créée →
 
 **NATS JetStream déployé et validé en cluster** (2026-09-19, avec tracking-service) — `infra/k8s/nats-values.yaml` (doc section 12.10) installé via Helm (`helm install nats nats/nats -n kelenda -f nats-values.yaml`), premier test réel d'un publisher externe + consumer en pod fonctionnant de bout en bout.
 
+**Pipeline CI GitHub Actions livré et validé en conditions réelles** (2026-09-19, branche `dev-homelab-deploy`) — `.github/workflows/ci.yml` (doc section 13) jamais créé jusqu'ici (CLAUDE.md le notait explicitement). Corrigé deux bugs de la doc source, jamais testée avant aujourd'hui :
+- `npm ci` avec `working-directory: services/<service>` échoue : ce repo est un vrai monorepo npm workspaces à lockfile unique (`package-lock.json` racine), pas un par service. Remplacé par `npm ci` à la racine puis `npm run <script> --workspace=services/<service>`, avec un build explicite de `packages/shared` avant chaque service (sinon `tsc` échoue sur l'import de ses types compilés).
+- Le job `detect-changes` échouait en 5s avec `Error: Resource not accessible by integration` — `dorny/paths-filter` appelle l'API GitHub (`pulls.listFiles`) pour lister les fichiers changés d'une PR, ce qui nécessite `permissions: pull-requests: read` sur le `GITHUB_TOKEN`, jamais déclaré explicitement dans la doc. Ajouté au job.
+
+**ESLint jamais installé ni configuré, découvert en testant la CI** — les 5 services référencent `"lint": "eslint src --ext .ts"` depuis leur création, mais `eslint` n'a jamais été une dépendance : `npm run lint` aurait échoué immédiatement partout, jamais remarqué faute de CI pour le révéler. Installé `eslint` 9 (flat config, seul format supporté par cette version) + `typescript-eslint` à la racine (`eslint.base.js`, même pattern que `tsconfig.base.json`), chaque service l'étend via un `eslint.config.js` minimal (nécessaire : eslint résout sa config depuis le cwd où `npm run lint --workspace=...` l'exécute, le dossier du service, pas la racine du monorepo). Le lint a immédiatement trouvé une vraie erreur (`catch (err)` inutilisé dans `calendar-service/src/routes/sources.ts`), corrigée.
+
+**Validé par un vrai run GitHub Actions** (PR de test `dev-homelab-deploy → dev`, run [35440727993](https://github.com/louisdrouhin/Kelenda/actions/runs/35440727993)) : `detect-changes` détecte correctement les 5 services modifiés, chacun passe `install → build shared → lint → test → build` en matrice parallèle, conclusion `success`. Le job `docker-build` (push GHCR) n'a pas tourné — condition `github.ref == 'refs/heads/main'`, jamais testée pour de vrai puisqu'aucun push vers `main` n'a encore eu lieu dans ce repo.
+
 **Reste à faire pour cette phase :**
 - NetworkPolicies (doc section 12.11) — pas encore appliquées sur ce cluster de test (nécessite Calico, pas Flannel — non vérifié sur ce cluster k3d).
 - TLS / entryPoint `websecure` — le test a été fait en HTTP simple (`web`), pas HTTPS.
-- Déploiement sur le vrai homelab (K3s réel, pas k3d local) — tout ce qui précède n'a été fait que sur un cluster k3d local éphémère.
+- Déploiement sur le vrai homelab (K3s réel, pas k3d local) — tout ce qui précède n'a été fait que sur un cluster k3d local éphémère. **Nécessite un accès direct au homelab physique de l'utilisateur, hors de portée d'une session autonome.**
+- `docker-build` (push GHCR) jamais déclenché en conditions réelles — seulement vérifié par lecture du YAML, pas par un vrai run sur `main`.
 
 ## 8. Frontend — ⬜
 
