@@ -8,6 +8,13 @@ on:
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
+    # dorny/paths-filter appelle l'API GitHub (pulls.listFiles) pour lister les
+    # fichiers changés d'une PR — sans cette permission explicite, le GITHUB_TOKEN
+    # par défaut peut être trop restreint selon les réglages du repo et l'appel
+    # échoue avec "Resource not accessible by integration" (trouvé en testant
+    # réellement le workflow, jamais visible dans la doc source ni en local).
+    permissions:
+      pull-requests: read
     outputs:
       services: ${{ steps.matrix.outputs.services }}
     steps:
