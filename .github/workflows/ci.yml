@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.matrix.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared: 'packages/shared/**'
+            auth: 'services/auth-service/**'
+            calendar: 'services/calendar-service/**'
+            finance: 'services/finance-service/**'
+            tracking: 'services/tracking-service/**'
+            notification: 'services/notification-service/**'
+
+      # Si packages/shared change, tous les services en dépendent potentiellement :
+      # on les rebuild tous par sécurité plutôt que de risquer un service qui tourne
+      # avec une version obsolète du package partagé.
+      - name: Construire la liste des services à builder
+        id: matrix
+        run: |
+          if [[ "${{ steps.filter.outputs.shared }}" == "true" ]]; then
+            services='["auth-service","calendar-service","finance-service","tracking-service","notification-service"]'
+          else
+            list=()
+            [[ "${{ steps.filter.outputs.auth }}" == "true" ]] && list+=("auth-service")
+            [[ "${{ steps.filter.outputs.calendar }}" == "true" ]] && list+=("calendar-service")
+            [[ "${{ steps.filter.outputs.finance }}" == "true" ]] && list+=("finance-service")
+            [[ "${{ steps.filter.outputs.tracking }}" == "true" ]] && list+=("tracking-service")
+            [[ "${{ steps.filter.outputs.notification }}" == "true" ]] && list+=("notification-service")
+            services=$(printf '%s\n' "${list[@]}" | jq -R . | jq -s -c .)
+          fi
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+
+  build-and-test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          # Un seul package-lock.json à la racine (npm workspaces) — pas un par
+          # service. npm ci doit tourner à la racine pour que la résolution du
+          # workspace @kelenda/shared fonctionne (échoue silencieusement, ou pas
+          # du tout, si lancé depuis services/<service> qui n'a pas son propre lockfile).
+          cache-dependency-path: package-lock.json
+
+      - name: Install (workspace racine)
+        run: npm ci
+
+      # packages/shared est un prérequis TypeScript de chaque service (il importe
+      # ses types compilés depuis dist/) — sans ce build, tsc échoue sur les
+      # services qui l'utilisent, qu'ils aient changé ou non.
+      - name: Build packages/shared
+        run: npm run build --workspace=packages/shared
+
+      # Les 5 services étant en Express, les scripts npm lint/test/build sont
+      # identiques partout — cette convention resterait valable si un futur
+      # service adoptait un autre framework.
+      - name: Lint
+        run: npm run lint --workspace=services/${{ matrix.service }}
+
+      - name: Test
+        run: npm test --workspace=services/${{ matrix.service }}
+
+      - name: Build
+        run: npm run build --workspace=services/${{ matrix.service }}
+
+  docker-build:
+    needs: [detect-changes, build-and-test]
+    if: github.ref == 'refs/heads/main' && needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/kelenda-${{ matrix.service }}:latest
+            ghcr.io/${{ github.repository_owner }}/kelenda-${{ matrix.service }}:${{ github.sha }}
