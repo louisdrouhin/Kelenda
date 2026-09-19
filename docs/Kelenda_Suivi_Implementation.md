@@ -1,6 +1,6 @@
 # Kelenda — Suivi d'implémentation
 
-Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19**.
+Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (tracking-service validé en k3d, premier déploiement réel de NATS JetStream en cluster).
 
 Légende : ✅ fait et testé — 🚧 en cours / partiel — ⬜ pas commencé
 
@@ -144,9 +144,52 @@ Tous les endpoints testés avec de **vrais appels API externes** (pas de mocks) 
 - Barème SMIC non automatisé (doc section 5 : "pas d'API temps réel officielle") — mise à jour manuelle à prévoir 1-2 fois/an dans `salary_scales`.
 - `expected_amount` sur `prime_checks` toujours `null` — le texte de la convention est trouvé mais son montant n'est pas extrait/parsé automatiquement (nécessiterait un parsing plus poussé du texte légal, hors périmètre MVP).
 
-## 5. tracking-service + notification-service — ⬜
+## 5. tracking-service + notification-service — 🚧 (tracking-service : ✅ endpoints + validé en k3d ; notification-service pas commencé)
 
-Pas commencé. Dépend d'un pub/sub NATS fonctionnel de bout en bout.
+### tracking-service — ✅ (branche `dev-tracking-service`)
+
+**Endpoints livrés :**
+| Endpoint | Statut |
+|---|---|
+| `POST /tracking/missions` | ✅ |
+| `GET /tracking/missions` | ✅ (filtre `status`) |
+| `GET /tracking/missions/:id` | ✅ |
+| `PATCH /tracking/missions/:id` | ✅ |
+| `DELETE /tracking/missions/:id` | ✅ |
+| `GET /tracking/frameworks/:school` | ✅ (sert la version la plus récente par école) |
+| `GET /tracking/competencies` | ✅ |
+| `PATCH /tracking/competencies/:node_id` | ✅ (upsert sur `(user_id, competency_node_id)`) |
+| `POST /tracking/missions/:id/competencies` | ✅ |
+| `GET /tracking/tutors` | ✅ |
+| `POST /tracking/tutors` | ✅ |
+| `PATCH /tracking/tutors/:id` | ✅ |
+| `POST /tracking/tutors/:id/interactions` | ✅ |
+| `GET /tracking/tutors/:id/interactions` | ✅ |
+| `POST /tracking/reports/generate` | ✅ (snapshot JSONB des missions de la période) |
+| `GET /tracking/reports` | ✅ |
+| `GET /tracking/reports/:id/download` | ✅ (sert le snapshot JSON, pas de rendu PDF réel — voir "Pas encore fait") |
+
+**Détails techniques livrés :**
+- Migrations : `missions`, puis `competency_frameworks`/`competency_nodes`/`competency_entries`/`mission_competency_links`/`tutors`/`tutor_interactions`/`activity_reports` (schéma section 9.4 tel quel).
+- Consumer NATS `kelenda.calendar.mission_scheduled` (`src/mission-scheduled-consumer.ts`) : crée automatiquement une mission `source='suggested'` avec `related_event_id`, sans appel synchrone à calendar-service (payload de l'événement auto-suffisant, conforme doc section 11). Testé avec un vrai événement publié sur NATS.
+- `POST /tracking/missions/:id/competencies` : `competency_node_ids` validés (existence) avant insertion — évite une violation de FK brute remontée en 500.
+- `POST /tracking/reports/generate` : snapshot des missions de la période au moment de la génération (`content_snapshot` JSONB) — reste stable si les missions sont modifiées après coup.
+- JWT vérifié localement (même convention `JWT_PUBLIC_KEY`/`JWT_PUBLIC_KEY_PATH` que les autres services).
+- **Bug trouvé et corrigé** : le driver `pg` parse une colonne `date` en objet `Date` puis le sérialise en heure locale du process — `start_date`/`end_date`/`interaction_date` revenaient décalés d'un jour en JSON (`2026-09-20` → `2026-09-19T22:00:00.000Z` en UTC+2). Fixé via un `types.setTypeParser` dédié dans `db.ts` qui garde la chaîne `YYYY-MM-DD` brute.
+- `Dockerfile` créé (même template que les 3 autres services, fix `tsconfig.base.json`/`dist/index.js` appliqué dès l'écriture — pas besoin de le redécouvrir comme pour auth-service).
+- Testé contre une vraie DB Postgres locale et un vrai broker NATS local (pas encore en k3d) : CRUD complet sur les 4 domaines, validations (400 sur enums/dates/tableaux invalides), 404 sur ressources inexistantes ou appartenant à un autre utilisateur, 401 sans token, création automatique de mission via événement réel, framework CESI de test avec arbre de nœuds, liaison mission↔compétences, tuteur + interaction + historique, génération de rapport avec une vraie mission dans la période.
+
+**Validé en k3d avec Traefik forward-auth réel et NATS JetStream réel** (2026-09-19) — manifest `infra/k8s/13-tracking-service.yaml`, route `kelenda-tracking` (PathPrefix `/tracking`, protégée forward-auth). **Premier déploiement réel de NATS JetStream en cluster** (`infra/k8s/nats-values.yaml`, jamais committé jusqu'ici — installé via Helm). Testé : register/login via Traefik, `POST`/`GET /tracking/missions` bloqués sans token (401) et fonctionnels avec token valide, JWT cross-service vérifié, migrations (les 2 fichiers) passées par l'initContainer avec succès (confirme que le fix `$(VAR)` s'applique aussi à tracking-service). **Consumer NATS validé en conditions réelles de cluster** : un `mission_scheduled` publié depuis l'extérieur du cluster (port-forward vers le service NATS) a bien été consommé par le pod tracking-service et a créé la mission `source='suggested'` correspondante — c'est le premier test de bout en bout où un publisher et un consumer NATS fonctionnent réellement en cluster (prérequis noté par le plan de développement pour la phase 5/6).
+
+**Pas encore fait :**
+- **Pas de route de création de référentiel/nœud de compétences** — la doc (section 10) n'en liste aucune ; un `competency_frameworks`/`competency_nodes` doit être inséré directement en base pour l'instant. Tant qu'aucun outil d'admin ou de seed n'existe, `GET /tracking/frameworks/:school` renvoie 404 pour toute école sans données insérées manuellement.
+- **Pas de génération PDF réelle** — `GET /tracking/reports/:id/download` sert le snapshot JSON quel que soit le `format` demandé à la génération (`pdf` par défaut n'est qu'un label stocké, aucun rendu).
+- `GET /internal/events/:id` côté calendar-service et la paire `tracking→calendar` (HMAC) — nécessaire seulement pour la liaison manuelle mission↔événement (pas utilisée par le consumer `mission_scheduled`, qui est auto-suffisant).
+- Paire `tracking→auth-service` (`GET /internal/users/:id`) — nécessaire pour l'en-tête des rapports d'activité (nom/email de l'utilisateur), pas encore branchée.
+
+### notification-service — ⬜
+
+Pas commencé.
 
 ## 6. Intégration événementielle bout-en-bout — ⬜
 
@@ -159,13 +202,14 @@ Pas commencé.
 - `services/auth-service/Dockerfile` créé (template doc section 14, avec deux corrections : ajout de `tsconfig.base.json` manquant du contexte de build, point d'entrée `dist/index.js` au lieu de `dist/main.js` pour matcher le code réel).
 - Testé bout-en-bout via Traefik (`http://localhost:8080`, entryPoint `web` HTTP — pas `websecure`/TLS, pas encore configuré) : `register` → `login` → `GET /auth/me` (JWT vérifié par le service lui-même) → forward-auth (401 sans token, 200 + headers injectés avec token valide, confirmé aussi dans les logs Traefik) → `/internal/*` confirmé non exposé publiquement (404, aucune IngressRoute ne le sert).
 
-**Bug trouvé et corrigé dans le manifest** (touche les 5 services, pas seulement auth-service) : dans un `Deployment`, la substitution `$(VAR)` façon `DATABASE_URL: "postgresql://user:$(PASSWORD)@host/db"` ne se résout **que si `PASSWORD` est déclarée AVANT `DATABASE_URL`** dans la liste `env`. La doc section 12.4 (et donc 12.5 à 12.8 par le même pattern) déclare `DATABASE_URL` avant le secret qu'elle référence — ça échoue silencieusement (le literal `$(PASSWORD)` est envoyé tel quel à Postgres, qui rejette l'auth sans message clair côté appelant). **Corrigé dès l'écriture** dans `10-auth-service.yaml`, `11-calendar-service.yaml` et `12-finance-service.yaml` (secretKeyRef déclaré avant la variable qui l'interpole) — fonctionne du premier coup à chaque fois depuis. **Reste à appliquer** quand `tracking-service`/`notification-service` seront écrits (13-/14-*.yaml).
+**Bug trouvé et corrigé dans le manifest** (touche les 5 services, pas seulement auth-service) : dans un `Deployment`, la substitution `$(VAR)` façon `DATABASE_URL: "postgresql://user:$(PASSWORD)@host/db"` ne se résout **que si `PASSWORD` est déclarée AVANT `DATABASE_URL`** dans la liste `env`. La doc section 12.4 (et donc 12.5 à 12.8 par le même pattern) déclare `DATABASE_URL` avant le secret qu'elle référence — ça échoue silencieusement (le literal `$(PASSWORD)` est envoyé tel quel à Postgres, qui rejette l'auth sans message clair côté appelant). **Corrigé dès l'écriture** dans `10-auth-service.yaml`, `11-calendar-service.yaml`, `12-finance-service.yaml` et `13-tracking-service.yaml` (secretKeyRef déclaré avant la variable qui l'interpole) — fonctionne du premier coup à chaque fois depuis. **Reste à appliquer** quand `notification-service` sera écrit (14-*.yaml).
+
+**NATS JetStream déployé et validé en cluster** (2026-09-19, avec tracking-service) — `infra/k8s/nats-values.yaml` (doc section 12.10) installé via Helm (`helm install nats nats/nats -n kelenda -f nats-values.yaml`), premier test réel d'un publisher externe + consumer en pod fonctionnant de bout en bout.
 
 **Reste à faire pour cette phase :**
 - NetworkPolicies (doc section 12.11) — pas encore appliquées sur ce cluster de test (nécessite Calico, pas Flannel — non vérifié sur ce cluster k3d).
 - TLS / entryPoint `websecure` — le test a été fait en HTTP simple (`web`), pas HTTPS.
 - Déploiement sur le vrai homelab (K3s réel, pas k3d local) — tout ce qui précède n'a été fait que sur un cluster k3d local éphémère.
-- NATS JetStream (doc section 12.10, Helm) — pas encore installé/testé en cluster (nécessaire dès que calendar-service ou un autre service publie des événements).
 
 ## 8. Frontend — ⬜
 
@@ -178,6 +222,8 @@ Pas commencé (React + Vite SPA, PWA).
 - **Panel admin** (`PATCH /users/:id/role` ou équivalent) — permettre à un admin de promouvoir/rétrograder un membre de son workspace. Nécessaire maintenant que tout compte démarre `member` : sans ce panel, aucun workspace ne peut avoir d'admin. Backend : endpoint protégé par `requireAdmin` (middleware déjà en place). Frontend : écran dédié, à construire en phase 8.
 - **Pas de table de membership multi-users** (`workspace_members` ou équivalent) — le schéma actuel (doc section 9.1) lie un `user` à un seul `workspace_id` fixe. `POST /workspaces` crée un workspace indépendant sans y rattacher automatiquement le créateur. Si Kelenda doit permettre à un utilisateur d'appartenir à plusieurs workspaces, ou un rôle différent par workspace, ça demandera une migration de refonte (colonne `workspace_id` sur `users` → table de jointure).
 - **OAuth testé en réel uniquement avec Microsoft** (Google et GitHub ont le même code générique mais n'ont pas été testés avec de vrais credentials).
-- **Bug de manifest `$(VAR)`** (voir section 7) déjà corrigé pour auth/calendar/finance-service — reste à appliquer pour tracking-service et notification-service au moment de leur écriture.
+- **Bug de manifest `$(VAR)`** (voir section 7) déjà corrigé pour auth/calendar/finance/tracking-service — reste à appliquer pour notification-service au moment de son écriture.
 - **NetworkPolicies, TLS, NATS pas encore testés en cluster** (voir section 7, "reste à faire").
+- **Pas de route de création de référentiel de compétences côté tracking-service** — un `competency_frameworks`/`competency_nodes` (ex. CESI) doit être inséré directement en base tant qu'aucun outil d'admin n'existe ; la doc (section 10) ne prévoit aucun endpoint pour ça.
+- **Pas de génération PDF réelle pour les rapports d'activité** — `GET /tracking/reports/:id/download` sert toujours le snapshot JSON, quel que soit le `format` choisi à la génération.
 - **`deadline-job.ts` (calendar-service, A.4) pas encore testé en k3d** — validé uniquement en local (voir section 3).

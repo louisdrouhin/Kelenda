@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tracking-service
+  namespace: kelenda
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: tracking-service }
+  template:
+    metadata:
+      labels: { app: tracking-service }
+    spec:
+      initContainers:
+        - name: migrate
+          image: kelenda-tracking-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "node-pg-migrate", "up", "--migrations-dir", "services/tracking-service/migrations"]
+          workingDir: /app
+          env:
+            # TRACKING_DB_PASSWORD doit être déclarée AVANT DATABASE_URL pour
+            # que $(...) s'interpole (cf. bug documenté dans le suivi d'implémentation).
+            - name: TRACKING_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: TRACKING_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://tracking_service:$(TRACKING_DB_PASSWORD)@postgres:5432/tracking_db"
+      containers:
+        - name: tracking-service
+          image: kelenda-tracking-service:local
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "services/tracking-service/dist/index.js"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: TRACKING_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: TRACKING_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://tracking_service:$(TRACKING_DB_PASSWORD)@postgres:5432/tracking_db"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            # Vérification JWT locale en filet de sécurité (défense en profondeur) :
+            # le service ne se fie pas uniquement à X-User-Id injecté par Traefik,
+            # il revérifie la signature lui-même et en dérive le user_id.
+            - name: JWT_PUBLIC_KEY
+              valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PUBLIC_KEY } }
+          resources:
+            requests: { cpu: 150m, memory: 150Mi }
+            limits: { cpu: 400m, memory: 300Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tracking-service
+  namespace: kelenda
+spec:
+  selector: { app: tracking-service }
+  ports:
+    - port: 80
+      targetPort: 3000

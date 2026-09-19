@@ -1,0 +1,23 @@
+# Valeurs pour le chart Helm officiel NATS
+# https://github.com/nats-io/k8s/tree/main/helm/charts/nats
+#
+# Installation :
+#   helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+#   helm install nats nats/nats -n kelenda -f nats-values.yaml
+
+config:
+  jetstream:
+    enabled: true
+    fileStore:
+      pvc:
+        size: 2Gi
+  cluster:
+    enabled: false   # instance unique — suffisant pour le MVP homelab
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
