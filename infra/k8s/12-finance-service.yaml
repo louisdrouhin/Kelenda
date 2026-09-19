@@ -41,6 +41,8 @@ spec:
               valueFrom: { secretKeyRef: { name: postgres-secrets, key: FINANCE_DB_PASSWORD } }
             - name: DATABASE_URL
               value: "postgresql://finance_service:$(FINANCE_DB_PASSWORD)@postgres:5432/finance_db"
+            - name: NATS_URL
+              value: "nats://nats:4222"
             # Vérification JWT locale en filet de sécurité (défense en profondeur).
             - name: JWT_PUBLIC_KEY
               valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PUBLIC_KEY } }

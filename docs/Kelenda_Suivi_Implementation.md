@@ -1,6 +1,6 @@
 # Kelenda — Suivi d'implémentation
 
-Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (notification-service livré et validé en k3d — les 5 services ont maintenant tous une première implémentation complète).
+Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (intégration événementielle bout-en-bout validée avec les 5 services déployés simultanément en k3d, phase 6 du plan).
 
 Légende : ✅ fait et testé — 🚧 en cours / partiel — ⬜ pas commencé
 
@@ -77,7 +77,7 @@ Toutes les routes testées manuellement contre une vraie DB Postgres, y compris 
 - JWT vérifié localement par `calendar-service` (jamais confiance au seul `X-User-Id` Traefik, conforme au CLAUDE.md) — même convention dual-mode `JWT_PUBLIC_KEY`/`JWT_PUBLIC_KEY_PATH` qu'auth-service.
 - `Dockerfile` créé (même template qu'auth-service, fix `tsconfig.base.json` inclus dès le départ).
 
-**Validé en k3d avec Traefik forward-auth réel** (2026-09-18) — manifest `infra/k8s/11-calendar-service.yaml`, route `kelenda-calendar` (PathPrefix `/calendar`, protégée forward-auth) dans `20-traefik-routes.yaml`. A fonctionné du premier coup grâce au fix de l'ordre des env vars déjà identifié sur auth-service. Testé : register/login via Traefik, `GET`/`POST /calendar/sources` bloqués sans token (401) et fonctionnels avec token valide (200/201), JWT cross-service vérifié.
+**Validé en k3d avec Traefik forward-auth réel** (2026-09-18) — manifest `infra/k8s/11-calendar-service.yaml`, route `kelenda-calendar` (PathPrefix `/calendar`, protégée forward-auth) dans `20-traefik-routes.yaml`. A fonctionné du premier coup grâce au fix de l'ordre des env vars déjà identifié sur auth-service. Testé : register/login via Traefik, `GET`/`POST /calendar/sources` bloqués sans token (401) et fonctionnels avec token valide (200/201), JWT cross-service vérifié. **Angle mort de cette passe** (trouvé et corrigé le 2026-09-19, voir section 6) : `NATS_URL` manquait du manifest depuis cette validation — jamais détecté car seul le CRUD REST était testé, pas la publication NATS réelle en cluster.
 
 ### Serveur CalDAV (RFC 4791 + RFC 6578) — ✅ complet, testé via de vraies requêtes HTTP et validé en k3d
 
@@ -218,9 +218,21 @@ Tous les endpoints testés avec de **vrais appels API externes** (pas de mocks) 
 - Pas de vraie souscription web push testée (nécessiterait un navigateur réel avec Service Worker) — le format de clé n'a été validé qu'en échec contrôlé.
 - Pas de job planifié pour générer `tutor_interaction_upcoming` ou `rapport_a_generer_bientot` côté tracking-service — ces deux événements existent dans le consumer mais rien ne les publie encore (tracking-service n'a pas ces jobs, contrairement à `deadline-job.ts` côté calendar-service pour A.4).
 
-## 6. Intégration événementielle bout-en-bout — ⬜
+## 6. Intégration événementielle bout-en-bout — ✅ (2026-09-19, branche `dev-e2e-integration`)
 
-Pas commencé formellement (scénario complet documenté et scripté de bout en bout), mais les briques sont maintenant validées séparément : `mission_scheduled` (calendar→tracking) et `user_registered`/`deadline_approaching` (auth,calendar→notification) fonctionnent réellement en cluster k3d, chacun testé indépendamment lors de la validation de tracking-service et notification-service. Reste à dérouler explicitement le scénario du plan ("accepter une suggestion de révision → mission créée → notification envoyée") en une seule fois, avec les 5 services déployés simultanément.
+Scénario du plan ("accepter une suggestion de révision → mission créée → notification envoyée") déroulé explicitement en une seule fois, **avec les 5 services (auth, calendar, finance, tracking, notification) déployés et `Running` simultanément dans le même cluster k3d** — première fois que c'est testé ensemble plutôt que service par service. Flux réel via Traefik public (`localhost:8080`) : `register` → `login` → `GET /calendar/free-slots` → `POST /calendar/free-slots/accept` → `mission_scheduled` publié → consommé par tracking-service → mission `source='suggested'` créée → `mission_creee` publié (nouvel événement, voir ci-dessous) → consommé par notification-service → email réellement envoyé via Infomaniak (statut `sent` vérifié en base à chaque étape).
+
+**Deux trous découverts en déroulant ce scénario pour la première fois** (jamais détectés par les validations service-par-service précédentes, qui ne testaient que le CRUD REST de chaque service isolément) :
+
+1. **`auth-service` ne publiait jamais `user_registered`** — listé comme livré dans une passe précédente du suivi, mais `/auth/register` n'appelait jamais `publishEvent` et ne stockait même pas `display_name`. Corrigé : la colonne est renseignée, l'événement publié après le `COMMIT` (best-effort si `NATS_URL` absent). `NATS_URL` ajouté au `.env.example` et au manifest k8s (jamais nécessaire jusqu'ici).
+2. **`NATS_URL` manquant dans les manifests `11-calendar-service.yaml` et `12-finance-service.yaml`** depuis leur création — leurs pods tournaient sans cette variable, donc toute tentative de `publishEvent` était silencieusement sautée (`if (process.env.NATS_URL)` sans erreur, pour ne pas bloquer la création de la ressource principale si NATS est down). `POST /calendar/free-slots/accept` retournait 201 sans jamais publier `mission_scheduled`. Corrigé dans les deux manifests.
+
+**Gap de catalogue comblé** : la doc (section 11) ne faisait consommer `mission_scheduled` que par tracking-service — aucun événement ne notifiait la création automatique d'une mission, alors que le scénario du plan le suppose implicitement. Nouvel événement **`mission_creee`** ajouté (tracking-service émetteur, notification-service abonné), publié uniquement pour `source='suggested'` — une mission créée manuellement ne publie rien.
+
+**Reste hors périmètre de cette validation** :
+- Testé uniquement en k3d local, pas sur le homelab réel (voir section 7).
+- Le doublon de log `user_registered` observé une fois (deux entrées identiques) vient probablement d'un chevauchement entre l'ancien et le nouveau pod `notification-service` pendant un `rollout restart` — pas creusé plus loin, comportement transitoire du déploiement de test, pas du code applicatif.
+- `tutor_interaction_upcoming` et `rapport_a_generer_bientot` (tracking-service) toujours jamais publiés en pratique (pas de job planifié) — non couverts par ce scénario, qui ne teste que la chaîne `mission_scheduled`/`mission_creee`.
 
 ## 7. Déploiement homelab + sécurité réseau — 🚧 (validation auth-service faite, reste le homelab réel)
 
@@ -252,7 +264,8 @@ Pas commencé (React + Vite SPA, PWA).
 - **Bug de manifest `$(VAR)`** (voir section 7) corrigé dans les 5 services dès leur écriture — plus rien en attente sur ce point.
 - **`tutor_interaction_upcoming` et `rapport_a_generer_bientot` jamais publiés** — notification-service les consomme (consumer NATS branché), mais tracking-service n'a pas encore les jobs planifiés qui les émettraient (rien d'équivalent à `deadline-job.ts` côté calendar-service pour l'instant).
 - **Web push jamais testé avec une vraie souscription navigateur** — seule la validation de format côté librairie (échec avec une fausse clé) a été vérifiée pour notification-service.
-- **NetworkPolicies, TLS, NATS pas encore testés en cluster** (voir section 7, "reste à faire").
+- **NetworkPolicies, TLS pas encore testés en cluster** (voir section 7, "reste à faire") — NATS, lui, est validé en cluster depuis la validation de tracking-service (section 5) et confirmé à nouveau par l'intégration bout-en-bout (section 6).
+- **`NATS_URL` manquait des manifests calendar/finance-service depuis leur création**, trouvé et corrigé le 2026-09-19 (voir section 6) — leur publication d'événements était silencieusement no-op en cluster jusque-là. Rappel pour tout futur service/manifest : vérifier explicitement qu'un événement est bien reçu par un vrai consumer en cluster, pas seulement que l'endpoint REST répond.
 - **Pas de route de création de référentiel de compétences côté tracking-service** — un `competency_frameworks`/`competency_nodes` (ex. CESI) doit être inséré directement en base tant qu'aucun outil d'admin n'existe ; la doc (section 10) ne prévoit aucun endpoint pour ça.
 - **Pas de génération PDF réelle pour les rapports d'activité** — `GET /tracking/reports/:id/download` sert toujours le snapshot JSON, quel que soit le `format` choisi à la génération.
 - **`deadline-job.ts` (calendar-service, A.4) pas encore testé en k3d** — validé uniquement en local (voir section 3).

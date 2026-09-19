@@ -1124,6 +1124,19 @@ Convention de subject NATS : `kelenda.<service_emetteur>.<event_type>` (ex. `kel
 
 ### tracking-service (émetteur)
 
+#### `mission_creee`
+- **Déclencheur :** création automatique d'une `missions` avec `source='suggested'`, suite à la consommation de `mission_scheduled` (calendar-service). Ajouté après coup (2026-09-19) pour que le scénario "accepter un créneau libre → mission créée → notification envoyée" (`Kelenda_Plan_Developpement.md`, section 6) soit réellement couvert par le catalogue — jusqu'ici `mission_scheduled` n'était consommé que par tracking-service, aucun événement ne notifiait la création de la mission elle-même. Uniquement pour `source='suggested'` (création automatique) — une mission créée manuellement via `POST /tracking/missions` ne publie rien, l'utilisateur vient de l'action lui-même.
+- **Abonné :** notification-service
+- **Payload :**
+```json
+{
+  "user_id": "uuid",
+  "mission_id": "uuid",
+  "title": "string",
+  "start_date": "date"
+}
+```
+
 #### `tutor_interaction_upcoming`
 - **Déclencheur :** job planifié sur `tutor_interactions` dont `interaction_date` approche.
 - **Abonné :** notification-service
@@ -1183,7 +1196,7 @@ Convention de subject NATS : `kelenda.<service_emetteur>.<event_type>` (ex. `kel
 
 ### Récapitulatif des abonnements
 
-Pour le MVP, **notification-service est l'unique abonné** de tous les événements ci-dessus (sauf `mission_scheduled`, consommé par tracking-service) — pas de fan-out multi-abonnés à gérer pour l'instant. Ça simplifie la première implémentation : un seul consumer JetStream à configurer par événement, potentiellement un seul consumer durable filtrant sur `kelenda.*.{deadline_approaching,conflit_planning_detecte,prime_manquante_detectee,aide_disponible_detectee,tutor_interaction_upcoming,rapport_genere,rapport_a_generer_bientot,user_registered}` côté notification-service.
+Pour le MVP, **notification-service est l'unique abonné** de tous les événements ci-dessus (sauf `mission_scheduled`, consommé par tracking-service) — pas de fan-out multi-abonnés à gérer pour l'instant. Ça simplifie la première implémentation : un seul consumer JetStream à configurer par événement, potentiellement un seul consumer durable filtrant sur `kelenda.*.{deadline_approaching,conflit_planning_detecte,prime_manquante_detectee,aide_disponible_detectee,tutor_interaction_upcoming,rapport_genere,rapport_a_generer_bientot,user_registered,mission_creee}` côté notification-service.
 
 
 ---

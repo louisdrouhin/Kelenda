@@ -41,6 +41,8 @@ spec:
               valueFrom: { secretKeyRef: { name: postgres-secrets, key: CALENDAR_DB_PASSWORD } }
             - name: DATABASE_URL
               value: "postgresql://calendar_service:$(CALENDAR_DB_PASSWORD)@postgres:5432/calendar_db"
+            - name: NATS_URL
+              value: "nats://nats:4222"
             # Vérification JWT locale en filet de sécurité (défense en profondeur) :
             # le service ne se fie pas uniquement à X-User-Id injecté par Traefik,
             # il revérifie la signature lui-même et en dérive le user_id.
