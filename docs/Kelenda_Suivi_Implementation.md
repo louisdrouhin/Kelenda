@@ -1,6 +1,6 @@
 # Kelenda — Suivi d'implémentation
 
-Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-18**.
+Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19**.
 
 Légende : ✅ fait et testé — 🚧 en cours / partiel — ⬜ pas commencé
 
@@ -159,7 +159,7 @@ Pas commencé.
 - `services/auth-service/Dockerfile` créé (template doc section 14, avec deux corrections : ajout de `tsconfig.base.json` manquant du contexte de build, point d'entrée `dist/index.js` au lieu de `dist/main.js` pour matcher le code réel).
 - Testé bout-en-bout via Traefik (`http://localhost:8080`, entryPoint `web` HTTP — pas `websecure`/TLS, pas encore configuré) : `register` → `login` → `GET /auth/me` (JWT vérifié par le service lui-même) → forward-auth (401 sans token, 200 + headers injectés avec token valide, confirmé aussi dans les logs Traefik) → `/internal/*` confirmé non exposé publiquement (404, aucune IngressRoute ne le sert).
 
-**Bug trouvé et corrigé dans le manifest** (touche potentiellement les 5 services, pas seulement auth-service) : dans un `Deployment`, la substitution `$(VAR)` façon `DATABASE_URL: "postgresql://user:$(PASSWORD)@host/db"` ne se résout **que si `PASSWORD` est déclarée AVANT `DATABASE_URL`** dans la liste `env`. La doc section 12.4 (et donc 12.5 à 12.8 par le même pattern) déclare `DATABASE_URL` avant le secret qu'elle référence — ça échoue silencieusement (le literal `$(PASSWORD)` est envoyé tel quel à Postgres, qui rejette l'auth sans message clair côté appelant). **À corriger dans les manifests `calendar-service`/`finance-service`/`tracking-service`/`notification-service` quand on les écrira** : mettre le `secretKeyRef` avant la variable qui l'interpole.
+**Bug trouvé et corrigé dans le manifest** (touche les 5 services, pas seulement auth-service) : dans un `Deployment`, la substitution `$(VAR)` façon `DATABASE_URL: "postgresql://user:$(PASSWORD)@host/db"` ne se résout **que si `PASSWORD` est déclarée AVANT `DATABASE_URL`** dans la liste `env`. La doc section 12.4 (et donc 12.5 à 12.8 par le même pattern) déclare `DATABASE_URL` avant le secret qu'elle référence — ça échoue silencieusement (le literal `$(PASSWORD)` est envoyé tel quel à Postgres, qui rejette l'auth sans message clair côté appelant). **Corrigé dès l'écriture** dans `10-auth-service.yaml`, `11-calendar-service.yaml` et `12-finance-service.yaml` (secretKeyRef déclaré avant la variable qui l'interpole) — fonctionne du premier coup à chaque fois depuis. **Reste à appliquer** quand `tracking-service`/`notification-service` seront écrits (13-/14-*.yaml).
 
 **Reste à faire pour cette phase :**
 - NetworkPolicies (doc section 12.11) — pas encore appliquées sur ce cluster de test (nécessite Calico, pas Flannel — non vérifié sur ce cluster k3d).
@@ -178,5 +178,6 @@ Pas commencé (React + Vite SPA, PWA).
 - **Panel admin** (`PATCH /users/:id/role` ou équivalent) — permettre à un admin de promouvoir/rétrograder un membre de son workspace. Nécessaire maintenant que tout compte démarre `member` : sans ce panel, aucun workspace ne peut avoir d'admin. Backend : endpoint protégé par `requireAdmin` (middleware déjà en place). Frontend : écran dédié, à construire en phase 8.
 - **Pas de table de membership multi-users** (`workspace_members` ou équivalent) — le schéma actuel (doc section 9.1) lie un `user` à un seul `workspace_id` fixe. `POST /workspaces` crée un workspace indépendant sans y rattacher automatiquement le créateur. Si Kelenda doit permettre à un utilisateur d'appartenir à plusieurs workspaces, ou un rôle différent par workspace, ça demandera une migration de refonte (colonne `workspace_id` sur `users` → table de jointure).
 - **OAuth testé en réel uniquement avec Microsoft** (Google et GitHub ont le même code générique mais n'ont pas été testés avec de vrais credentials).
-- **Bug de manifest `$(VAR)`** (voir section 7) à corriger dans les manifests des 4 autres services au moment de leur écriture.
+- **Bug de manifest `$(VAR)`** (voir section 7) déjà corrigé pour auth/calendar/finance-service — reste à appliquer pour tracking-service et notification-service au moment de leur écriture.
 - **NetworkPolicies, TLS, NATS pas encore testés en cluster** (voir section 7, "reste à faire").
+- **`deadline-job.ts` (calendar-service, A.4) pas encore testé en k3d** — validé uniquement en local (voir section 3).

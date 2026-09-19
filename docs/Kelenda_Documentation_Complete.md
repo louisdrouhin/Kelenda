@@ -220,10 +220,10 @@ Ces ajouts n'impliqueraient pas de remettre en cause les bases existantes — Re
 
 ### Sources de données pour le simulateur salaire/droits
 
-- **API Légifrance** (portail PISTE) — accès à la base KALI (textes des conventions collectives), gratuite après inscription, mise à jour quotidienne.
-- **API Entreprise** (entreprise.api.gouv.fr) — à partir d'un SIRET, renvoie automatiquement la convention collective applicable.
-- **Barèmes SMIC/URSSAF** — pas d'API temps réel officielle disponible ; config versionnée et sourcée, mise à jour manuelle 1 à 2 fois par an.
-- **Aides (CAF, région)** — pas de source officielle fiable identifiée pour automatiser l'éligibilité ; prévoir des liens vers les simulateurs officiels existants plutôt qu'un recalcul interne pour le MVP.
+- **API Légifrance** (portail PISTE) — accès à la base KALI (textes des conventions collectives), gratuite après inscription, mise à jour quotidienne. **Implémenté et validé en réel (2026-09-19)** — endpoints exacts (`POST /consult/kaliContIdcc`, `POST /search` fond KALI) documentés dans `Kelenda_Suivi_Implementation.md`.
+- **API Entreprise** (entreprise.api.gouv.fr) — à partir d'un SIRET, renvoie automatiquement la convention collective applicable. **Remplacée en implémentation (2026-09-19)** par **siret2idcc** (SocialGouv, `https://siret2idcc.fabrique.social.gouv.fr`) : l'API Entreprise exige une authentification ProConnect réservée aux agents publics/organismes habilités, inaccessible pour un projet en phase de dev. siret2idcc est gratuite, sans authentification, mêmes données officielles (DSN/KALI). Détails dans `Kelenda_Suivi_Implementation.md`.
+- **Barèmes SMIC/URSSAF** — pas d'API temps réel officielle disponible ; config versionnée et sourcée, mise à jour manuelle 1 à 2 fois par an. **Barème apprentis implémenté** (service-public.fr, migration `1700000001000_seed_salary_scales`).
+- **Aides (CAF, région)** — pas de source officielle fiable identifiée pour automatiser l'éligibilité ; prévoir des liens vers les simulateurs officiels existants plutôt qu'un recalcul interne pour le MVP. **Implémenté** avec les 3 aides citées ci-dessus (heuristiques simples + redirection).
 
 Choix assumé d'éviter le scraping de sites tiers non officiels, au profit de sources gouvernementales stables, pour la fiabilité juridique et la pérennité technique.
 
@@ -502,7 +502,11 @@ CREATE TABLE calendar_sources (
 );
 
 CREATE INDEX idx_calendar_sources_user_id ON calendar_sources(user_id);
+```
 
+**`caldav_perso` — décision d'implémentation (2026-09-18) :** Kelenda **héberge son propre serveur CalDAV** (RFC 4791 + RFC 6578 sync-collection) plutôt que de se connecter en lecture à un calendrier externe (symétrique à `ics_ecole`/`ics_entreprise`) — un vrai client (app Calendrier iPhone/macOS, Google Calendar) s'y connecte et y synchronise ses événements perso. Cette source n'est plus créable manuellement via `POST /calendar/sources` : elle est créée automatiquement au premier accès CalDAV authentifié. Détails complets dans `docs/Kelenda_Suivi_Implementation.md`, section calendar-service.
+
+```sql
 -- ------------------------------------------------------------
 -- events
 -- ------------------------------------------------------------
@@ -911,6 +915,10 @@ Chaque service expose en plus un `GET /health` (sans auth, aucune logique métie
 | PATCH | `/calendar/conflicts/:id` | Changer le statut d'un conflit (résolu/ignoré) | Oui |
 | GET | `/calendar/commute` | Estimation de trajet entre deux événements | Oui |
 | GET | `/internal/events/:id` | **[interne]** Détail complet d'un événement | Service-to-service |
+| PATCH | `/calendar/events/:id` | **[ajouté, hors doc initiale]** Marquer/démarquer un événement comme deadline (A.4, `is_deadline`) | Oui |
+| POST/GET/DELETE | `/calendar/caldav/*`, `PROPFIND`/`REPORT`/`PUT`/`DELETE` | **[ajouté, hors doc initiale]** Serveur CalDAV complet (RFC 4791 + RFC 6578) — voir note sous `calendar_sources` (section 9.2) | Basic Auth dédiée |
+
+*`GET /calendar/commute` (A.5) et `GET /internal/events/:id` (paire `tracking→calendar`) ne sont pas encore implémentés — voir `Kelenda_Suivi_Implementation.md`.*
 
 ---
 
