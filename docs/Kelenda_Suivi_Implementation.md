@@ -1,6 +1,6 @@
 # Kelenda — Suivi d'implémentation
 
-Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (pipeline CI GitHub Actions livré et validé par un vrai run — reste le déploiement homelab réel, hors de portée sans accès direct à la machine).
+Ce fichier suit l'avancement réel du code par rapport au plan de `Kelenda_Plan_Developpement.md`. Il est tenu à jour au fil du développement — dernière mise à jour : **2026-09-19** (déploiement réel sur le homelab de l'utilisateur, K3s+Calico installés depuis zéro, NetworkPolicies validées — reste TLS et le flux CI→GHCR→cluster).
 
 Légende : ✅ fait et testé — 🚧 en cours / partiel — ⬜ pas commencé
 
@@ -234,7 +234,7 @@ Scénario du plan ("accepter une suggestion de révision → mission créée →
 - Le doublon de log `user_registered` observé une fois (deux entrées identiques) vient probablement d'un chevauchement entre l'ancien et le nouveau pod `notification-service` pendant un `rollout restart` — pas creusé plus loin, comportement transitoire du déploiement de test, pas du code applicatif.
 - `tutor_interaction_upcoming` et `rapport_a_generer_bientot` (tracking-service) toujours jamais publiés en pratique (pas de job planifié) — non couverts par ce scénario, qui ne teste que la chaîne `mission_scheduled`/`mission_creee`.
 
-## 7. Déploiement homelab + sécurité réseau — 🚧 (validation auth-service faite, reste le homelab réel)
+## 7. Déploiement homelab + sécurité réseau — ✅ (2026-09-19 — vrai homelab, K3s+Calico, NetworkPolicies validées)
 
 **Prérequis "auth-service validé en k3d" rempli** (2026-09-18), sur un cluster k3d local (pas encore le homelab final) :
 - Manifests créés dans `infra/k8s/` : `00-namespace.yaml`, `01-postgres.yaml`, `10-auth-service.yaml`, `20-traefik-routes.yaml`.
@@ -253,11 +253,34 @@ Scénario du plan ("accepter une suggestion de révision → mission créée →
 
 **Validé par un vrai run GitHub Actions** (PR de test `dev-homelab-deploy → dev`, run [35440727993](https://github.com/louisdrouhin/Kelenda/actions/runs/35440727993)) : `detect-changes` détecte correctement les 5 services modifiés, chacun passe `install → build shared → lint → test → build` en matrice parallèle, conclusion `success`. Le job `docker-build` (push GHCR) n'a pas tourné — condition `github.ref == 'refs/heads/main'`, jamais testée pour de vrai puisqu'aucun push vers `main` n'a encore eu lieu dans ce repo.
 
+### Déploiement sur le vrai homelab — ✅ (2026-09-19, avec accès SSH direct de l'utilisateur)
+
+Premier déploiement réel sur le homelab physique de l'utilisateur (`srv-kelenda`, Ubuntu 26.04 LTS, 4 vCPU / ~4.3Gi RAM / 39G disque libre), pas un cluster k3d éphémère — état des lieux fait avant toute action (rien d'installé, machine propre). Étapes réalisées dans l'ordre :
+
+- **Prérequis machine** : swap désactivé (`swapoff -a` + entrée commentée dans `/etc/fstab` pour la persistance au reboot) — recommandé pour la stabilité de kubelet.
+- **K3s installé avec Flannel désactivé** (`INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy"`), puis **Calico v3.32.2** appliqué par-dessus (version vérifiée comme dernière stable au moment de l'install, doc section 12.11 le demande explicitement). Node passé `Ready` après le bootstrap Calico (erreur `BIRD is not ready` transitoire au tout premier démarrage, résolue seule en ~30s — normal, pas un bug).
+- **Helm installé**, NATS JetStream déployé via le chart officiel (mêmes `nats-values.yaml` que les tests k3d).
+- **Docker installé sur le serveur** (absent par défaut, seul `containerd` de K3s était présent) pour builder les 5 images avec les Dockerfiles existants — repo transféré par `rsync` (exclusion `node_modules`/`dist`/`.git`/`*.env`, aucun secret local transféré, vérifié). Les images Docker et le containerd de K3s étant deux runtimes séparés, chaque image a été exportée (`docker save`) puis importée dans le containerd de K3s (`k3s ctr images import`) — pas de registre externe utilisé.
+- **Tous les secrets recréés avec de vraies valeurs** (jamais les `CHANGE_ME` des manifests) : mots de passe Postgres par service, nouvelle paire JWT RS256 générée directement sur le serveur (jamais transitée par la machine locale), 3 secrets HMAC internes, identifiants Légifrance (réutilisés depuis le `.env` local de finance-service), clés VAPID + SMTP Infomaniak (réutilisées depuis les tests notification-service validés en session). **Piège rencontré plusieurs fois** : `kubectl apply -f <manifest-avec-bloc-Secret>` réécrase un secret déjà positionné avec les valeurs `CHANGE_ME` du fichier local — il faut soit appliquer le manifest sans son bloc `Secret`, soit recréer le secret *après* l'apply, jamais avant sans revérifier ensuite.
+- **Les 5 services + NATS + Postgres tournent `Running` simultanément sur ce cluster réel.**
+
+**Scénario complet testé en conditions réelles** (pas de mock) via `http://192.168.1.25` (Traefik, entryPoint `web`) : `register` (premier vrai compte créé, `louis@beta-dev.me`) → `login` → `GET /calendar/free-slots` → `POST /calendar/free-slots/accept` → `mission_scheduled` → mission créée dans tracking-service (`source='suggested'`) → `mission_creee` → **2 emails réellement envoyés et reçus** (`user_registered` au register, `mission_creee` après le scénario) via le vrai SMTP Infomaniak. `/internal/*` confirmé non exposé (404). 401 sans token, 200 avec token valide sur les endpoints protégés.
+
+### NetworkPolicies — ✅ (doc section 12.11, jamais créé jusqu'ici)
+
+`infra/k8s/21-network-policies.yaml` construit depuis la doc et appliqué sur ce même cluster homelab (Calico déjà en place, prérequis rempli).
+
+**Bug trouvé en l'appliquant réellement** : la doc source ne prévoit aucune `NetworkPolicy` pour NATS. Avec `default-deny-ingress` (`podSelector: {}` s'applique à tout le namespace, NATS inclus), ça bloque silencieusement toute publication/consommation d'événement dès l'application des policies — y compris les pods système du chart Helm NATS lui-même. Ajouté `allow-nats` (label réel du pod vérifié : `app.kubernetes.io/name=nats`, via `kubectl get pods --show-labels`), autorisant les 5 services + le pod NATS lui-même sur les ports 4222/8222/6222.
+
+**Validé réellement après application** (pas seulement en théorie) :
+- Le scénario complet (accept créneau → `mission_scheduled` → `mission_creee` → email) refonctionne à l'identique une fois les policies actives — confirme qu'`allow-nats` et les autres policies `allow-*` sont correctement dimensionnées.
+- **Le trou de sécurité identifié dans l'audit de la doc est réellement fermé** : un pod arbitraire du namespace (`curlimages/curl` éphémère, `kubectl run --rm`) ne peut plus joindre `calendar-service` directement en forgeant `X-User-Id` — timeout/connexion refusée (`curl` code 28), contre un `200` si la policy n'était pas là.
+
 **Reste à faire pour cette phase :**
-- NetworkPolicies (doc section 12.11) — pas encore appliquées sur ce cluster de test (nécessite Calico, pas Flannel — non vérifié sur ce cluster k3d).
-- TLS / entryPoint `websecure` — le test a été fait en HTTP simple (`web`), pas HTTPS.
-- Déploiement sur le vrai homelab (K3s réel, pas k3d local) — tout ce qui précède n'a été fait que sur un cluster k3d local éphémère. **Nécessite un accès direct au homelab physique de l'utilisateur, hors de portée d'une session autonome.**
-- `docker-build` (push GHCR) jamais déclenché en conditions réelles — seulement vérifié par lecture du YAML, pas par un vrai run sur `main`.
+- TLS / entryPoint `websecure` — le test a été fait en HTTP simple (`web`), pas HTTPS. Nécessiterait un certificat (Let's Encrypt via cert-manager, ou auto-signé pour un usage purement homelab) et une exposition réseau au-delà du LAN local si un accès externe est voulu.
+- `docker-build` (push GHCR) jamais déclenché en conditions réelles — seulement vérifié par lecture du YAML et par un run GitHub Actions sur une PR (pas sur `main`), pas par un vrai push vers `main`. Non testé non plus : le pull de ces images GHCR *depuis* le homelab (le déploiement actuel utilise des images buildées et importées localement sur le serveur, pas encore de flux CI→registre→cluster automatisé).
+- Reloader (ou équivalent) pour redéployer automatiquement les pods à la rotation d'un secret — mentionné dans la doc (section 10) comme "à considérer", pas mis en place.
+- Sauvegarde/snapshot des PVC Postgres — aucune stratégie de backup en place sur ce cluster réel.
 
 ## 8. Frontend — ⬜
 
@@ -273,7 +296,7 @@ Pas commencé (React + Vite SPA, PWA).
 - **Bug de manifest `$(VAR)`** (voir section 7) corrigé dans les 5 services dès leur écriture — plus rien en attente sur ce point.
 - **`tutor_interaction_upcoming` et `rapport_a_generer_bientot` jamais publiés** — notification-service les consomme (consumer NATS branché), mais tracking-service n'a pas encore les jobs planifiés qui les émettraient (rien d'équivalent à `deadline-job.ts` côté calendar-service pour l'instant).
 - **Web push jamais testé avec une vraie souscription navigateur** — seule la validation de format côté librairie (échec avec une fausse clé) a été vérifiée pour notification-service.
-- **NetworkPolicies, TLS pas encore testés en cluster** (voir section 7, "reste à faire") — NATS, lui, est validé en cluster depuis la validation de tracking-service (section 5) et confirmé à nouveau par l'intégration bout-en-bout (section 6).
+- **TLS pas encore testé en cluster** (voir section 7, "reste à faire") — NetworkPolicies et NATS, eux, sont validés sur le vrai homelab depuis le 2026-09-19.
 - **`NATS_URL` manquait des manifests calendar/finance-service depuis leur création**, trouvé et corrigé le 2026-09-19 (voir section 6) — leur publication d'événements était silencieusement no-op en cluster jusque-là. Rappel pour tout futur service/manifest : vérifier explicitement qu'un événement est bien reçu par un vrai consumer en cluster, pas seulement que l'endpoint REST répond.
 - **Pas de route de création de référentiel de compétences côté tracking-service** — un `competency_frameworks`/`competency_nodes` (ex. CESI) doit être inséré directement en base tant qu'aucun outil d'admin n'existe ; la doc (section 10) ne prévoit aucun endpoint pour ça.
 - **Pas de génération PDF réelle pour les rapports d'activité** — `GET /tracking/reports/:id/download` sert toujours le snapshot JSON, quel que soit le `format` choisi à la génération.

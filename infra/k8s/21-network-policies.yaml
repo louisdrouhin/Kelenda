@@ -1,0 +1,173 @@
+# ============================================================
+# NetworkPolicies — ferme le trou identifié en audit : sans ça,
+# n'importe quel pod du cluster peut appeler directement un
+# service (ex. calendar-service) et forger un en-tête X-User-Id,
+# contournant complètement Traefik et l'authentification JWT.
+#
+# ATTENTION — prérequis obligatoire : K3s utilise Flannel comme
+# CNI par défaut, qui N'APPLIQUE PAS les NetworkPolicy (elles
+# seraient créées mais silencieusement ignorées). Il faut
+# installer K3s avec Flannel désactivé et Calico à la place :
+#
+#   curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy" sh -
+#   kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/<version>/manifests/calico.yaml
+#   (vérifier la dernière version stable sur docs.tigera.io avant d'appliquer)
+#
+# Sur un cluster déjà installé avec Flannel, il faut réinstaller
+# K3s avec ces flags — pas de bascule à chaud.
+#
+# Le label exact du pod Traefik peut varier selon la version de
+# K3s : vérifier avec `kubectl get pods -n kube-system --show-labels`
+# et ajuster le podSelector ci-dessous si besoin.
+# ============================================================
+
+# --- Filet de sécurité par défaut : tout ce qui n'a pas de règle
+#     explicite ci-dessous est refusé en entrée ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: kelenda
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-auth-service
+  namespace: kelenda
+spec:
+  podSelector:
+    matchLabels: { app: auth-service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 3000 }]
+    # Appelants internes : tracking-service et notification-service
+    # (GET /internal/users/:id)
+    - from:
+        - podSelector: { matchLabels: { app: tracking-service } }
+        - podSelector: { matchLabels: { app: notification-service } }
+      ports: [{ port: 3000 }]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-calendar-service
+  namespace: kelenda
+spec:
+  podSelector:
+    matchLabels: { app: calendar-service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 3000 }]
+    # Appelant interne : tracking-service (GET /internal/events/:id)
+    - from:
+        - podSelector: { matchLabels: { app: tracking-service } }
+      ports: [{ port: 3000 }]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-finance-service
+  namespace: kelenda
+spec:
+  podSelector:
+    matchLabels: { app: finance-service }
+  policyTypes: [Ingress]
+  ingress:
+    # Aucun appelant interne — uniquement Traefik.
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 3000 }]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-tracking-service
+  namespace: kelenda
+spec:
+  podSelector:
+    matchLabels: { app: tracking-service }
+  policyTypes: [Ingress]
+  ingress:
+    # Aucun appelant interne identifié à ce jour (voir section 10 —
+    # aucun endpoint /internal/* exposé par tracking-service pour l'instant).
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 3000 }]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-notification-service
+  namespace: kelenda
+spec:
+  podSelector:
+    matchLabels: { app: notification-service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 3000 }]
+
+---
+# PostgreSQL : uniquement joignable par les 5 services applicatifs,
+# jamais directement depuis Traefik ni depuis l'extérieur du cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres
+  namespace: kelenda
+spec:
+  podSelector:
+    matchLabels: { app: postgres }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: auth-service } }
+        - podSelector: { matchLabels: { app: calendar-service } }
+        - podSelector: { matchLabels: { app: finance-service } }
+        - podSelector: { matchLabels: { app: tracking-service } }
+        - podSelector: { matchLabels: { app: notification-service } }
+      ports: [{ port: 5432 }]
+
+---
+# NATS : absent de la doc source, ajouté après coup (2026-09-19, déploiement
+# homelab) — sans cette policy, default-deny-ingress (podSelector: {}
+# s'applique à TOUT le namespace, NATS inclus) bloque silencieusement toute
+# publication/consommation d'événement, y compris depuis les pods système
+# du chart Helm (nats-box). Label réel du pod : app.kubernetes.io/name=nats
+# (vérifié avec `kubectl get pods -n kelenda --show-labels`).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-nats
+  namespace: kelenda
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: nats }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: calendar-service } }
+        - podSelector: { matchLabels: { app: finance-service } }
+        - podSelector: { matchLabels: { app: tracking-service } }
+        - podSelector: { matchLabels: { app: notification-service } }
+        - podSelector: { matchLabels: { app: auth-service } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: nats } }
+      ports: [{ port: 4222 }, { port: 8222 }, { port: 6222 }]
