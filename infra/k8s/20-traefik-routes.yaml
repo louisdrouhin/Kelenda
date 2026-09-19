@@ -186,3 +186,20 @@ spec:
       services:
         - name: tracking-service
           port: 80
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kelenda-notification
+  namespace: kelenda
+spec:
+  entryPoints: [web]
+  routes:
+    - match: PathPrefix(`/notifications`)
+      kind: Rule
+      middlewares:
+        - name: forward-auth
+        - name: rate-limit
+      services:
+        - name: notification-service
+          port: 80

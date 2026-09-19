@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: notification-service-secrets
+  namespace: kelenda
+type: Opaque
+stringData:
+  VAPID_PUBLIC_KEY: "CHANGE_ME"
+  VAPID_PRIVATE_KEY: "CHANGE_ME"
+  VAPID_SUBJECT: "mailto:CHANGE_ME@example.com"
+  SMTP_HOST: "CHANGE_ME"
+  SMTP_PORT: "587"
+  SMTP_USER: "CHANGE_ME"
+  SMTP_PASSWORD: "CHANGE_ME"
+  SMTP_FROM: "CHANGE_ME"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: kelenda
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: notification-service }
+  template:
+    metadata:
+      labels: { app: notification-service }
+    spec:
+      initContainers:
+        - name: migrate
+          image: kelenda-notification-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "node-pg-migrate", "up", "--migrations-dir", "services/notification-service/migrations"]
+          workingDir: /app
+          env:
+            # NOTIFICATION_DB_PASSWORD doit être déclarée AVANT DATABASE_URL pour
+            # que $(...) s'interpole (cf. bug documenté dans le suivi d'implémentation).
+            - name: NOTIFICATION_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: NOTIFICATION_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://notification_service:$(NOTIFICATION_DB_PASSWORD)@postgres:5432/notification_db"
+      containers:
+        - name: notification-service
+          image: kelenda-notification-service:local
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "services/notification-service/dist/index.js"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: NOTIFICATION_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-secrets, key: NOTIFICATION_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: "postgresql://notification_service:$(NOTIFICATION_DB_PASSWORD)@postgres:5432/notification_db"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            # Vérification JWT locale en filet de sécurité (défense en profondeur) :
+            # le service ne se fie pas uniquement à X-User-Id injecté par Traefik,
+            # il revérifie la signature lui-même et en dérive le user_id.
+            - name: JWT_PUBLIC_KEY
+              valueFrom: { secretKeyRef: { name: auth-service-secrets, key: JWT_PUBLIC_KEY } }
+            # Paire interne notification-service → auth-service (résolution
+            # d'email pour le canal email).
+            - name: AUTH_SERVICE_INTERNAL_URL
+              value: "http://auth-service.kelenda.svc.cluster.local"
+            - name: INTERNAL_SECRET_NOTIFICATION_AUTH
+              valueFrom: { secretKeyRef: { name: internal-pair-notification-auth, key: secret } }
+            - name: VAPID_PUBLIC_KEY
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: VAPID_PUBLIC_KEY } }
+            - name: VAPID_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: VAPID_PRIVATE_KEY } }
+            - name: VAPID_SUBJECT
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: VAPID_SUBJECT } }
+            - name: SMTP_HOST
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: SMTP_HOST } }
+            - name: SMTP_PORT
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: SMTP_PORT } }
+            - name: SMTP_USER
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: SMTP_USER } }
+            - name: SMTP_PASSWORD
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: SMTP_PASSWORD } }
+            - name: SMTP_FROM
+              valueFrom: { secretKeyRef: { name: notification-service-secrets, key: SMTP_FROM } }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: kelenda
+spec:
+  selector: { app: notification-service }
+  ports:
+    - port: 80
+      targetPort: 3000
