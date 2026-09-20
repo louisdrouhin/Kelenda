@@ -9,6 +9,7 @@ import { caldavEventsRouter } from './routes/caldav-events';
 import { conflictsRouter } from './routes/conflicts';
 import { eventsRouter } from './routes/events';
 import { freeSlotsRouter } from './routes/free-slots';
+import { internalRouter } from './routes/internal';
 import { sourcesRouter } from './routes/sources';
 
 const app = express();
@@ -36,6 +37,7 @@ app.use('/calendar/free-slots', freeSlotsRouter);
 app.use('/calendar/caldav/credentials', caldavCredentialsRouter);
 app.use('/calendar/caldav', caldavEventsRouter);
 app.use('/calendar/caldav', caldavDiscoveryRouter);
+app.use('/internal', internalRouter);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

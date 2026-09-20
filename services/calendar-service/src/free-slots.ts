@@ -13,13 +13,14 @@ export interface FreeSlotsParams {
   from: Date;
   to: Date;
   minDurationMinutes: number;
-  workingHoursStart: number; // heure locale UTC, 0-23
-  workingHoursEnd: number; // heure locale UTC, 0-23, exclusif
+  workingHoursStart: number; // heure locale Europe/Paris, 0-23
+  workingHoursEnd: number; // heure locale Europe/Paris, 0-23, exclusif
 }
 
 // Découpe [from, to) en fenêtres "heures d'éveil" journalières (working_hours_start
-// à working_hours_end, en UTC), puis soustrait les intervalles occupés (busy) pour
-// trouver les trous. Ne gère pas les fuseaux horaires utilisateur — tout en UTC.
+// à working_hours_end, en heure de Paris — pas UTC, sans quoi "pas après 22h" affiche
+// minuit à l'utilisateur en été), puis soustrait les intervalles occupés (busy) pour
+// trouver les trous.
 export function computeFreeSlots(params: FreeSlotsParams, busy: BusyInterval[]): FreeSlot[] {
   const dayWindows = buildDayWindows(params.from, params.to, params.workingHoursStart, params.workingHoursEnd);
   const sortedBusy = [...busy].sort((a, b) => a.start.getTime() - b.start.getTime());
@@ -59,6 +60,43 @@ function pushSlotIfLongEnough(slots: FreeSlot[], start: Date, end: Date, minDura
   });
 }
 
+const WORKING_TIMEZONE = 'Europe/Paris';
+
+const parisDatePartsFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: WORKING_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+// Date civile (Y-M-D) telle qu'affichée à Paris pour un instant UTC donné.
+function parisDateParts(instant: Date): { year: number; month: number; day: number } {
+  const parts = parisDatePartsFormatter.formatToParts(instant);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)!.value);
+  return { year: get('year'), month: get('month'), day: get('day') };
+}
+
+// Instant UTC correspondant à "année-mois-jour à hour:00" heure de Paris.
+// Approche par correction d'écart : on part d'une estimation UTC naïve, on lit
+// l'heure qu'elle affiche à Paris, puis on corrige la différence — gère
+// automatiquement le passage CET/CEST sans dépendance externe.
+function parisWallTimeToUtc(year: number, month: number, day: number, hour: number): Date {
+  const naiveUtc = new Date(Date.UTC(year, month - 1, day, hour));
+  const shownAtParis = new Intl.DateTimeFormat('en-US', {
+    timeZone: WORKING_TIMEZONE,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(naiveUtc);
+  const get = (type: string) => Number(shownAtParis.find((p) => p.type === type)!.value);
+  const shownAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') === 24 ? 0 : get('hour'), get('minute'));
+  const diffMs = naiveUtc.getTime() - shownAsUtc;
+  return new Date(naiveUtc.getTime() + diffMs);
+}
+
 function buildDayWindows(
   from: Date,
   to: Date,
@@ -67,15 +105,13 @@ function buildDayWindows(
 ): BusyInterval[] {
   const windows: BusyInterval[] = [];
 
-  const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
+  let { year, month, day } = parisDateParts(from);
 
-  while (cursor < to) {
-    const dayStart = new Date(
-      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), workingHoursStart)
-    );
-    const dayEnd = new Date(
-      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), workingHoursEnd)
-    );
+  while (true) {
+    const dayStart = parisWallTimeToUtc(year, month, day, workingHoursStart);
+    const dayEnd = parisWallTimeToUtc(year, month, day, workingHoursEnd);
+
+    if (dayStart >= to) break;
 
     const windowStart = dayStart < from ? from : dayStart;
     const windowEnd = dayEnd > to ? to : dayEnd;
@@ -84,7 +120,10 @@ function buildDayWindows(
       windows.push({ start: windowStart, end: windowEnd });
     }
 
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+    year = nextDay.getUTCFullYear();
+    month = nextDay.getUTCMonth() + 1;
+    day = nextDay.getUTCDate();
   }
 
   return windows;
