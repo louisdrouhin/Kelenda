@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+
+@source '../../packages/cal-kelenda/src/**/*.{ts,tsx}';
+
+@theme {
+  --font-sans: 'Istok Web', system-ui, sans-serif;
+
+  --color-accent: #008cff;
+  --color-ink: #08070c;
+  --color-cream: #f2f1ef;
+
+  --color-surface: #ffffff;
+  --color-border: #e5e5e7;
+}
+
+body {
+  margin: 0;
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}

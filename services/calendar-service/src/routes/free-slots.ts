@@ -1,8 +1,9 @@
 import { publishEvent } from '@kelenda/shared';
 import { Router } from 'express';
-import { pool } from '../db';
 import { computeFreeSlots, type BusyInterval } from '../free-slots';
+import { createInternalEvent } from '../internal-events';
 import { requireAuth } from '../middleware/require-auth';
+import { pool } from '../db';
 
 const router = Router();
 
@@ -88,43 +89,13 @@ router.post('/accept', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'start_at doit être antérieur à end_at' });
   }
 
-  const client = await pool.connect();
-  let event;
-  try {
-    await client.query('BEGIN');
-
-    const sourceResult = await client.query(
-      `INSERT INTO calendar_sources (user_id, type, label)
-       VALUES ($1, 'interne', 'Suggestions Kelenda')
-       ON CONFLICT (user_id) WHERE type = 'interne' DO NOTHING
-       RETURNING id`,
-      [req.auth!.sub]
-    );
-
-    let sourceId = sourceResult.rows[0]?.id;
-    if (!sourceId) {
-      const existing = await client.query(
-        "SELECT id FROM calendar_sources WHERE user_id = $1 AND type = 'interne'",
-        [req.auth!.sub]
-      );
-      sourceId = existing.rows[0].id;
-    }
-
-    const eventResult = await client.query(
-      `INSERT INTO events (source_id, title, start_at, end_at, category)
-       VALUES ($1, $2, $3, $4, 'personnel')
-       RETURNING id, title, start_at, end_at`,
-      [sourceId, title, start_at, end_at]
-    );
-    event = eventResult.rows[0];
-
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  const event = await createInternalEvent({
+    userId: req.auth!.sub,
+    title,
+    startAt: start_at,
+    endAt: end_at,
+    category: 'personnel',
+  });
 
   if (process.env.NATS_URL) {
     await publishEvent(process.env.NATS_URL, 'calendar', 'mission_scheduled', {
