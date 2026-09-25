@@ -4,6 +4,7 @@ import { DashboardLayout } from './components/layout/DashboardLayout'
 import { ToastProvider } from './components/ui/toast-context'
 import { AuthProvider } from './features/auth/auth-context'
 import { LoginPage } from './features/auth/pages/LoginPage'
+import { OAuthCallbackPage } from './features/auth/pages/OAuthCallbackPage'
 import { SignupPage } from './features/auth/pages/SignupPage'
 import { CalendarPage } from './features/calendar/pages/CalendarPage'
 import { HomePage } from './features/dashboard/pages/HomePage'
@@ -24,6 +25,7 @@ function App() {
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/signup" element={<SignupPage />} />
+              <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
               <Route
                 element={
                   <ProtectedRoute>

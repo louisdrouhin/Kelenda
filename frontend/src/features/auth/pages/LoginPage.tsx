@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import logoFull from '../../../assets/brand/logo-full.svg'
 import { Button } from '../../../components/ui/Button'
 import { Card } from '../../../components/ui/Card'
@@ -15,6 +15,8 @@ export function LoginPage() {
   const navigate = useNavigate()
   const { signIn } = useAuth()
   const { showToast } = useToast()
+  const [searchParams] = useSearchParams()
+  const oauthError = searchParams.get('oauth_error')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
@@ -44,6 +46,8 @@ export function LoginPage() {
               <h1 className="text-2xl text-ink">Connexion à Kelenda</h1>
               <p className="text-sm text-ink/60">Gère ton alternance à un seul endroit</p>
             </div>
+
+            {oauthError && <p className="text-sm text-red-500">{oauthError}</p>}
 
             <MicrosoftSignInButton />
 

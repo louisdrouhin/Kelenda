@@ -45,6 +45,14 @@ export async function logout(refresh_token: string): Promise<void> {
   await http.post(`${AUTH_BASE_URL}/logout`, { refresh_token })
 }
 
+// Échange le code temporaire reçu sur /oauth/callback?code=... (après un
+// login OAuth réussi côté auth-service) contre les vrais tokens. Usage
+// unique côté serveur — un second appel avec le même code échoue en 401.
+export async function exchangeOAuthCode(code: string): Promise<TokenPair> {
+  const { data } = await http.post<TokenPair>(`${AUTH_BASE_URL}/exchange`, { code })
+  return data
+}
+
 // POST /auth/register répond 409 quand l'email est déjà pris (contrainte
 // unique en base) — pas d'endpoint dédié de vérification pour éviter
 // d'exposer un moyen d'énumérer les comptes existants.
