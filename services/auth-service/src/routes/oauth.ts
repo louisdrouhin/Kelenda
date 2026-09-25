@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
+import type { Response } from 'express';
 import { Router } from 'express';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/require-auth';
 import { exchangeCodeForTokens, fetchOAuthProfile } from '../oauth/client';
+import { oauthExchangeCodeStore, oauthStateStore } from '../oauth/ephemeral-store';
 import { getOAuthProviderConfig, getOAuthRedirectUri, isOAuthProvider } from '../oauth/providers';
 import { encryptToken } from '../oauth/token-crypto';
 import { issueSession } from './session';
 
 const router = Router();
+
+function getFrontendUrl(): string {
+  return process.env.FRONTEND_URL ?? 'http://localhost:5183';
+}
 
 router.get('/login/:provider', (req, res) => {
   const { provider } = req.params;
@@ -18,6 +24,7 @@ router.get('/login/:provider', (req, res) => {
   const config = getOAuthProviderConfig(provider);
   const redirectUri = getOAuthRedirectUri(provider);
   const state = randomUUID();
+  oauthStateStore.set(state, { provider });
 
   const authorizationUrl = new URL(config.authorizationUrl);
   authorizationUrl.searchParams.set('client_id', config.clientId);
@@ -31,13 +38,23 @@ router.get('/login/:provider', (req, res) => {
 
 router.get('/callback/:provider', async (req, res) => {
   const { provider } = req.params;
-  const { code } = req.query;
+  const { code, state } = req.query;
 
   if (!isOAuthProvider(provider)) {
     return res.status(400).json({ error: 'Provider OAuth inconnu' });
   }
   if (typeof code !== 'string') {
     return res.status(400).json({ error: 'code manquant' });
+  }
+  if (typeof state !== 'string') {
+    return res.status(400).json({ error: 'state manquant' });
+  }
+
+  // Anti-CSRF : le state doit être celui émis par /login/:provider pour ce
+  // même provider, et n'est utilisable qu'une fois (take() le consomme).
+  const storedState = oauthStateStore.take(state);
+  if (!storedState || storedState.provider !== provider) {
+    return res.status(401).json({ error: 'state invalide ou expiré' });
   }
 
   const config = getOAuthProviderConfig(provider);
@@ -57,9 +74,8 @@ router.get('/callback/:provider', async (req, res) => {
   const identity = identityResult.rows[0];
   if (identity) {
     await refreshIdentityTokens(provider, profile.providerUserId, tokens);
-    return res
-      .status(200)
-      .json(await issueSession(identity.user_id, identity.workspace_id, req.headers['user-agent']));
+    const session = await issueSession(identity.user_id, identity.workspace_id, req.headers['user-agent']);
+    return redirectWithExchangeCode(res, session);
   }
 
   // Pas d'identity existante pour ce provider : première connexion via ce provider.
@@ -67,16 +83,38 @@ router.get('/callback/:provider', async (req, res) => {
   if (existingUserResult.rows[0]) {
     // L'email est déjà pris par un compte (password ou autre provider) non lié à celui-ci :
     // on refuse la liaison automatique pour éviter une prise de compte silencieuse.
-    return res.status(409).json({
-      error: 'Un compte existe déjà avec cet email. Connectez-vous puis liez ce provider via POST /auth/link/:provider.',
-    });
+    const message = encodeURIComponent(
+      'Un compte existe déjà avec cet email. Connecte-toi puis lie ce provider depuis les paramètres.'
+    );
+    return res.redirect(`${getFrontendUrl()}/login?oauth_error=${message}`);
   }
 
   const created = await createUserFromOAuthProfile(provider, profile, tokens);
+  const session = await issueSession(created.userId, created.workspaceId, req.headers['user-agent']);
+  return redirectWithExchangeCode(res, session);
+});
 
-  return res
-    .status(200)
-    .json(await issueSession(created.userId, created.workspaceId, req.headers['user-agent']));
+function redirectWithExchangeCode(res: Response, session: { access_token: string; refresh_token: string }) {
+  const exchangeCode = randomUUID();
+  oauthExchangeCodeStore.set(exchangeCode, session);
+  return res.redirect(`${getFrontendUrl()}/oauth/callback?code=${exchangeCode}`);
+}
+
+// Échange le code temporaire (issu de la redirection /callback/:provider)
+// contre les vrais tokens — appelé par le frontend juste après la
+// redirection. Usage unique : un second appel avec le même code échoue.
+router.post('/exchange', (req, res) => {
+  const { code } = req.body ?? {};
+  if (typeof code !== 'string') {
+    return res.status(400).json({ error: 'code est requis' });
+  }
+
+  const session = oauthExchangeCodeStore.take(code);
+  if (!session) {
+    return res.status(401).json({ error: 'code invalide, expiré, ou déjà utilisé' });
+  }
+
+  return res.status(200).json(session);
 });
 
 router.post('/link/:provider', requireAuth, async (req, res) => {
